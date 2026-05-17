@@ -1,32 +1,32 @@
-# Bare-SQL Engine - Documentação Técnica Completa
+# Bare-SQL Engine - Complete Technical Documentation
 
-**Data:** 7 de maio de 2026  
-**Versão:** 1.0-SNAPSHOT  
+**Date:** May 7, 2026  
+**Version:** 1.0-SNAPSHOT  
 **Java:** 21 (OpenJDK)  
-**Autor:** Engenheiro Gemirson Dos Santos Silva  
+**Author:** Engineer Gemirson Dos Santos Silva  
 
 
 ---
 
-## 📋 Índice
+## 📋 Table of Contents
 
-1. [Visão Geral Arquitetural](#visão-geral-arquitetural)
-2. [Camadas do Motor](#camadas-do-motor)
-3. [Decisões de Design](#decisões-de-design)
-4. [Componentes Principais](#componentes-principais)
-5. [Pipeline de Compilação](#pipeline-de-compilação)
-6. [Otimizações SSA](#otimizações-ssa)
-7. [Suporte Multi-Dialeto](#suporte-multi-dialeto)
-8. [Transpilação AOT](#transpilação-aot)
-9. [Executor Bare-Metal](#executor-bare-metal)
-10. [Testes e Cobertura](#testes-e-cobertura)
-11. [Exemplos de Uso](#exemplos-de-uso)
+1. [Architectural Overview](#architectural-overview)
+2. [Engine Layers](#engine-layers)
+3. [Design Decisions](#design-decisions)
+4. [Main Components](#main-components)
+5. [Compilation Pipeline](#compilation-pipeline)
+6. [SSA Optimizations](#ssa-optimizations)
+7. [Multi-Dialect Support](#multi-dialect-support)
+8. [AOT Transpilation](#aot-transpilation)
+9. [Bare-Metal Executor](#bare-metal-executor)
+10. [Tests and Coverage](#tests-and-coverage)
+11. [Usage Examples](#usage-examples)
 
 ---
 
-## Visão Geral Arquitetural
+## Architectural Overview
 
-O **Bare-SQL Engine** é um compilador SQL moderno de **4 camadas** (Front-End, Middle-End, Back-End, Runtime) que otimiza queries em tempo de compilação usando **SSA (Static Single Assignment)** e transpila para múltiplos dialetos SQL.
+The **Bare-SQL Engine** is a modern **4-layer** SQL compiler (Front-End, Middle-End, Back-End, Runtime) that optimizes queries at compile time using **SSA (Static Single Assignment)** and transpiles to multiple SQL dialects.
 
 ```mermaid
 graph TB
@@ -37,7 +37,7 @@ graph TB
     
     subgraph "Middle-End [SSA Optimization]"
         C["AstToIrPass<br/>AST → SSA IR"]
-        D["IrOptimizer<br/>CSE + Idempotência"]
+        D["IrOptimizer<br/>CSE + Idempotence"]
         E["IrToAstPass<br/>SSA IR → AST"]
     end
     
@@ -68,36 +68,36 @@ graph TB
 
 ---
 
-## Camadas do Motor
+## Engine Layers
 
-### 1. **Front-End: Construção da AST (Abstract Syntax Tree)**
+### 1. **Front-End: AST (Abstract Syntax Tree) Construction**
 
-**Objetivo:** Converter código de alto nível em representação intermediária estruturada.
+**Goal:** Convert high-level code into structured intermediate representation.
 
-**Componentes:**
-- `Sql.Builder`: API Fluent para construir queries
-- `Sql.Col`: Encapsulamento de Colunas
-- `SqlExpr`: Interface para Expressões Lógicas
-- `Nodes.*`: Representação dos nós da AST
+**Components:**
+- `Sql.Builder`: Fluent API to build queries
+- `Sql.Col`: Column Encapsulation
+- `SqlExpr`: Interface for Logical Expressions
+- `Nodes.*`: AST nodes representation
 
-**Decisão de Design:**
-- ✅ **API Fluent**: Melhor ergonomia e legibilidade
-- ✅ **Sealed Records**: Type safety em tempo de compilação
-- ✅ **Builder Pattern**: Composição flexível de queries
+**Design Decision:**
+- ✅ **Fluent API**: Better ergonomics and readability
+- ✅ **Sealed Records**: Compile-time type safety
+- ✅ **Builder Pattern**: Flexible query composition
 
-**Fluxo:**
+**Flow:**
 ```mermaid
 sequenceDiagram
-    participant User as Usuário
+    participant User
     participant Builder as Sql Builder
     participant Col as Col.of()
     participant AST as AST Nodes
     
-    User->>Builder: select("id", "nome")
+    User->>Builder: select("id", "name")
     Builder->>AST: Create Select Node
-    User->>Builder: from("usuarios")
+    User->>Builder: from("users")
     Builder->>AST: Create Table Node
-    User->>Col: Col.of("idade").gt(18)
+    User->>Col: Col.of("age").gt(18)
     Col->>AST: Create BinaryExpr (GT)
     User->>Builder: where(condition)
     Builder->>AST: Attach Where Clause
@@ -105,49 +105,49 @@ sequenceDiagram
     Builder-->>User: Return Complete Statement
 ```
 
-### 2. **Middle-End: Otimização SSA (Static Single Assignment)**
+### 2. **Middle-End: SSA (Static Single Assignment) Optimization**
 
-**Objetivo:** Otimizar a AST aplicando técnicas de compiladores modernos.
+**Goal:** Optimize the AST by applying modern compiler techniques.
 
-**Componentes:**
-- `AstToIrPass`: Converte AST para IR (Intermediate Representation)
-- `IrTypes`: Tipos primitivos SSA (LoadColumn, LoadLiteral, BinaryMath)
-- `IrOptimizer`: Aplica CSE (Common Subexpression Elimination)
-- `IrToAstPass`: Reconstrói AST otimizada
+**Components:**
+- `AstToIrPass`: Converts AST to IR (Intermediate Representation)
+- `IrTypes`: SSA primitive types (LoadColumn, LoadLiteral, BinaryMath)
+- `IrOptimizer`: Applies CSE (Common Subexpression Elimination)
+- `IrToAstPass`: Reconstructs optimized AST
 
-**Decisões de Design:**
+**Design Decisions:**
 
 #### **CSE (Common Subexpression Elimination)**
 ```java
-// ANTES da otimização
-(idade > 18) AND (idade > 18) OR (idade > 18)
-// 7 instruções SSA
+// BEFORE optimization
+(age > 18) AND (age > 18) OR (age > 18)
+// 7 SSA instructions
 
-// DEPOIS da otimização
-idade > 18
-// 3 instruções SSA - 57% de redução!
+// AFTER optimization
+age > 18
+// 3 SSA instructions - 57% reduction!
 ```
 
-**Por quê CSE?**
-- Reduz operações redundantes **antes** do banco de dados
-- Melhora performance em queries geradas por ORMs
-- Elimina cálculos desnecessários
+**Why CSE?**
+- Reduces redundant operations **before** the database
+- Improves performance on queries generated by ORMs
+- Eliminates unnecessary calculations
 
-#### **Idempotência Booleana**
+#### **Boolean Idempotence**
 ```
 A AND A = A
 A OR A = A
 ```
 
-**Fluxo SSA:**
+**SSA Flow:**
 
 ```mermaid
 graph LR
-    A["AST Bruta<br/>(idade > 18) AND (idade > 18)"]
+    A["Raw AST<br/>(age > 18) AND (age > 18)"]
     B["SSA IR<br/>%3 = LoadColumn<br/>%4 = LoadLiteral<br/>%2 = BinaryMath GT<br/>%6 = LoadColumn<br/>%7 = LoadLiteral<br/>%5 = BinaryMath GT<br/>%1 = BinaryMath AND"]
-    C["CSE Optimization<br/>Detecta %2 = %5<br/>Elimina instruções duplicadas"]
-    D["SSA Otimizado<br/>%3 = LoadColumn<br/>%4 = LoadLiteral<br/>%2 = BinaryMath GT"]
-    E["AST Otimizada<br/>idade > 18"]
+    C["CSE Optimization<br/>Detects %2 = %5<br/>Eliminates duplicate instructions"]
+    D["Optimized SSA<br/>%3 = LoadColumn<br/>%4 = LoadLiteral<br/>%2 = BinaryMath GT"]
+    E["Optimized AST<br/>age > 18"]
     
     A -->|AstToIrPass| B
     B -->|IrOptimizer| C
@@ -159,9 +159,9 @@ graph LR
 
 ---
 
-## Decisões de Design
+## Design Decisions
 
-### 1. **Por que Java Sealed Records?**
+### 1. **Why Java Sealed Records?**
 
 ```java
 sealed interface IrOp { }
@@ -170,55 +170,55 @@ record LoadLiteral(Object value) implements IrOp { }
 record BinaryMath(IrVar left, Op op, IrVar right) implements IrOp { }
 ```
 
-**Decisões:**
-- ✅ **Imutabilidade**: Garantida pelo compilador
+**Decisions:**
+- ✅ **Immutability**: Guaranteed by the compiler
 - ✅ **Pattern Matching**: `if (op instanceof LoadColumn c) { ... }`
-- ✅ **Type Safety**: Exhaust check em switches
-- ✅ **Zero Boxing**: Records são Zero-Cost Abstractions
+- ✅ **Type Safety**: Exhaust check on switches
+- ✅ **Zero Boxing**: Records are Zero-Cost Abstractions
 
-### 2. **Por que Zero-Reflection?**
+### 2. **Why Zero-Reflection?**
 
 ```java
-// ❌ COM REFLECTION (Overhead)
-List<Usuario> users = executor.query(sql, Usuario.class);
+// ❌ WITH REFLECTION (Overhead)
+List<User> users = executor.query(sql, User.class);
 
 // ✅ BARE-METAL (Zero-Reflection)
-List<Usuario> users = executor.query(sql, rs -> 
-    new Usuario(rs.getString("id"), rs.getString("nome"))
+List<User> users = executor.query(sql, rs -> 
+    new User(rs.getString("id"), rs.getString("name"))
 );
 ```
 
-**Benefícios:**
-- Sem JIT penalties de reflection
-- JIT pode inline o lambda diretamente
-- Controle explícito do mapeamento
+**Benefits:**
+- No reflection JIT penalties
+- JIT can inline the lambda directly
+- Explicit control over mapping
 
-### 3. **Por que AOT Compilation?**
+### 3. **Why AOT Compilation?**
 
 ```java
-// Runtime (SEM AOT)
-AST ast = builder.select(...).from(...).build();  // Alocação
-ir = AstToIrPass.visit(ast);                       // Processamento
+// Runtime (WITHOUT AOT)
+AST ast = builder.select(...).from(...).build();  // Allocation
+ir = AstToIrPass.visit(ast);                       // Processing
 optimized = IrOptimizer.optimize(ir);              // CPU cycles
-sql = DialectTranspiler.transpile(optimized);     // Mais CPU
+sql = DialectTranspiler.transpile(optimized);     // More CPU
 ```
 
 ```java
-// Compile-Time (COM AOT)
-// Tudo pré-compilado, runtime usa apenas:
-String sql = PrecompiledQueries.GET_USUARIOS_POSTGRES;
+// Compile-Time (WITH AOT)
+// Everything pre-compiled, runtime uses only:
+String sql = PrecompiledQueries.GET_USERS_POSTGRES;
 ```
 
-**Impacto:**
-- ⚡ **Zero overhead** em runtime
-- 🎯 **Startup 100ms** vs **50ms** (50% melhoria)
-- 📦 **Previsível**: Sem surpresas de GC
+**Impact:**
+- ⚡ **Zero overhead** at runtime
+- 🎯 **Startup 100ms** vs **50ms** (50% improvement)
+- 📦 **Predictable**: No GC surprises
 
 ---
 
-## Componentes Principais
+## Main Components
 
-### **Frontend Componentes**
+### **Frontend Components**
 
 ```mermaid
 classDiagram
@@ -255,7 +255,7 @@ classDiagram
     SelectStep --> FromStep
 ```
 
-### **Middle-End Componentes**
+### **Middle-End Components**
 
 ```mermaid
 classDiagram
@@ -288,7 +288,7 @@ classDiagram
     IrToAstPass --> IrTypes
 ```
 
-### **Back-End Componentes**
+### **Back-End Components**
 
 ```mermaid
 classDiagram
@@ -316,118 +316,118 @@ classDiagram
 
 ---
 
-## Pipeline de Compilação
+## Compilation Pipeline
 
 ```mermaid
 sequenceDiagram
-    participant User as Usuário
+    participant User
     participant Builder as Sql Builder
-    participant Frontend as Frontend
+    participant Frontend
     participant Optimizer as SSA Optimizer
     participant Backend as Backend Transpiler
     participant Runtime as Runtime Executor
     
-    User->>Builder: Construir Query
+    User->>Builder: Build Query
     Builder->>Frontend: AST
     activate Frontend
-    Frontend->>Optimizer: Passar AST
+    Frontend->>Optimizer: Pass AST
     deactivate Frontend
     
     activate Optimizer
-    Optimizer->>Optimizer: Converter para SSA IR
-    Optimizer->>Optimizer: Aplicar CSE
-    Optimizer->>Optimizer: Aplicar Idempotência
-    Optimizer->>Backend: AST Otimizada
+    Optimizer->>Optimizer: Convert to SSA IR
+    Optimizer->>Optimizer: Apply CSE
+    Optimizer->>Optimizer: Apply Idempotence
+    Optimizer->>Backend: Optimized AST
     deactivate Optimizer
     
     activate Backend
-    Backend->>Backend: Selecionar Dialeto
-    Backend->>Backend: Transpilar para SQL
+    Backend->>Backend: Select Dialect
+    Backend->>Backend: Transpile to SQL
     Backend->>Runtime: SQL String
     deactivate Backend
     
     activate Runtime
-    Runtime->>Runtime: Executar via JDBC
-    Runtime->>Runtime: Mapear ResultSet
-    Runtime-->>User: Resultados
+    Runtime->>Runtime: Execute via JDBC
+    Runtime->>Runtime: Map ResultSet
+    Runtime-->>User: Results
     deactivate Runtime
 ```
 
 ---
 
-## Otimizações SSA
+## SSA Optimizations
 
-### Transformações Aplicadas
+### Applied Transformations
 
 #### 1. **Common Subexpression Elimination (CSE)**
 
 ```
-Entrada: (x > 10) AND (x > 10) AND (x > 10)
+Input: (x > 10) AND (x > 10) AND (x > 10)
 
-SSA Bruta:
+Raw SSA:
   %1 = LoadColumn[name=x]
   %2 = LoadLiteral[value=10]
-  %3 = BinaryMath[left=%1, op=GT, right=%2]      ← Cálculo 1
+  %3 = BinaryMath[left=%1, op=GT, right=%2]      ← Calculation 1
   %4 = LoadColumn[name=x]
   %5 = LoadLiteral[value=10]
-  %6 = BinaryMath[left=%4, op=GT, right=%5]      ← Cálculo 2 (DUPLICADO)
+  %6 = BinaryMath[left=%4, op=GT, right=%5]      ← Calculation 2 (DUPLICATE)
   %7 = BinaryMath[left=%3, op=AND, right=%6]
   
-SSA Otimizada (CSE):
+Optimized SSA (CSE):
   %1 = LoadColumn[name=x]
   %2 = LoadLiteral[value=10]
-  %3 = BinaryMath[left=%1, op=GT, right=%2]      ← Reutilizado
+  %3 = BinaryMath[left=%1, op=GT, right=%2]      ← Reused
   %4 = BinaryMath[left=%3, op=AND, right=%3]     ← %6 → %3
   
-Redução: 7 → 4 instruções (-43%)
+Reduction: 7 → 4 instructions (-43%)
 ```
 
-#### 2. **Idempotência Booleana**
+#### 2. **Boolean Idempotence**
 
 ```
 A AND A → A
 A OR A → A
 ```
 
-**Implementação:**
+**Implementation:**
 ```java
 if (realLeft.equals(realRight) && (b.op() == Op.AND || b.op() == Op.OR)) {
     varAliases.put(inst.result(), realLeft);
-    continue; // Descarta o nó AND/OR completamente!
+    continue; // Discards the AND/OR node entirely!
 }
 ```
 
 #### 3. **Constant Folding**
 
 ```
-ANTES: 5 + 3
-DEPOIS: 8
+BEFORE: 5 + 3
+AFTER: 8
 
-ANTES: ("2024" > "2000")
-DEPOIS: true (Literal 1)
+BEFORE: ("2024" > "2000")
+AFTER: true (Literal 1)
 ```
 
-### Impacto de Performance
+### Performance Impact
 
 ```mermaid
 xychart-beta
-    title Redução de Instruções Após SSA
-    x-axis [CSE, Idempotência, Folding, Total]
-    y-axis "Instruções Eliminadas (%)" 0 --> 60
+    title Instruction Reduction After SSA
+    x-axis [CSE, Idempotence, Folding, Total]
+    y-axis "Eliminated Instructions (%)" 0 --> 60
     line [35, 20, 5, 57]
 ```
 
 ---
 
-## Suporte Multi-Dialeto
+## Multi-Dialect Support
 
-### Dialetos Suportados
+### Supported Dialects
 
 ```mermaid
 graph LR
-    AST["AST Otimizada"]
+    AST["Optimized AST"]
     
-    subgraph "Dialetos"
+    subgraph "Dialects"
         P["PostgreSQL<br/>JSON/JSONB<br/>RETURNING"]
         S["SQLite<br/>json_extract<br/>UPSERT"]
         M["MySQL<br/>ON DUPLICATE KEY<br/>JSON_EXTRACT"]
@@ -452,36 +452,36 @@ graph LR
     style M fill:#00758f
 ```
 
-### Exemplos de Transpilação
+### Transpilation Examples
 
-| Operação | PostgreSQL | SQLite | MySQL |
+| Operation | PostgreSQL | SQLite | MySQL |
 |----------|-----------|--------|-------|
 | JSON Extract | `payload ->> 'key'` | `json_extract(payload, '$.key')` | `JSON_EXTRACT(payload, '$.key')` |
 | UPSERT | `ON CONFLICT ... DO UPDATE` | `ON CONFLICT ... DO UPDATE` | `ON DUPLICATE KEY UPDATE` |
-| RETURNING | `RETURNING id` | Não suportado | Não suportado |
+| RETURNING | `RETURNING id` | Not supported | Not supported |
 | UUID | `uuid` | `TEXT` | `CHAR(36)` |
 
 ---
 
-## Transpilação AOT
+## AOT Transpilation
 
-### O que é AOT?
+### What is AOT?
 
-**Ahead-Of-Time Compilation**: Compilar queries em **tempo de build**, não em runtime.
+**Ahead-Of-Time Compilation**: Compiling queries at **build time**, not at runtime.
 
 ```mermaid
 graph LR
     subgraph "Build-Time"
-        A["1. Ler QueryRegistry"]
-        B["2. Construir AST"]
-        C["3. Otimizar SSA"]
-        D["4. Transpilar"]
-        E["5. Gerar PrecompiledQueries.java"]
+        A["1. Read QueryRegistry"]
+        B["2. Build AST"]
+        C["3. Optimize SSA"]
+        D["4. Transpile"]
+        E["5. Generate PrecompiledQueries.java"]
     end
     
     subgraph "Runtime"
-        F["6. Injetar SQL String"]
-        G["7. Executar JDBC"]
+        F["6. Inject SQL String"]
+        G["7. Execute JDBC"]
     end
     
     A --> B --> C --> D --> E
@@ -496,11 +496,11 @@ graph LR
     style G fill:#e8f5e9
 ```
 
-### Benefícios AOT
+### AOT Benefits
 
 ```
 ┌─────────────────────────────────────┐
-│ Runtime SEM AOT                     │
+│ Runtime WITHOUT AOT                 │
 ├─────────────────────────────────────┤
 │ 1. Parse Query Registry       5ms   │
 │ 2. Build AST                 10ms   │
@@ -512,39 +512,39 @@ graph LR
 └─────────────────────────────────────┘
 
 ┌─────────────────────────────────────┐
-│ Runtime COM AOT                     │
+│ Runtime WITH AOT                    │
 ├─────────────────────────────────────┤
-│ 6. Injetar SQL String         1ms   │
+│ 6. Inject SQL String          1ms   │
 │ 7. Execute SQL                4ms   │
 ├─────────────────────────────────────┤
 │ TOTAL: 5ms                          │
-│ ECONOMIA: 40ms (-89%)               │
+│ SAVINGS: 40ms (-89%)                │
 └─────────────────────────────────────┘
 ```
 
-### Exemplo de Geração AOT
+### AOT Generation Example
 
 ```java
-// Arquivo: PrecompiledQueries.java (GERADO)
+// File: PrecompiledQueries.java (GENERATED)
 public final class PrecompiledQueries {
-    // Query: GET_USUARIOS_MAIORES_IDADE (OTIMIZADA)
-    public static final String GET_USUARIOS_MAIORES_IDADE_POSTGRES = 
-        "SELECT \"id\", \"nome\", \"idade\" FROM \"usuarios\" WHERE \"idade\" > ?";
+    // Query: GET_ADULT_USERS (OPTIMIZED)
+    public static final String GET_ADULT_USERS_POSTGRES = 
+        "SELECT \"id\", \"name\", \"age\" FROM \"users\" WHERE \"age\" > ?";
     
-    public static final String GET_USUARIOS_MAIORES_IDADE_SQLITE = 
-        "SELECT \"id\", \"nome\", \"idade\" FROM \"usuarios\" WHERE \"idade\" > ?";
+    public static final String GET_ADULT_USERS_SQLITE = 
+        "SELECT \"id\", \"name\", \"age\" FROM \"users\" WHERE \"age\" > ?";
 }
 
-// Runtime: Simplesmente usar!
-String sql = PrecompiledQueries.GET_USUARIOS_MAIORES_IDADE_POSTGRES;
+// Runtime: Simply use!
+String sql = PrecompiledQueries.GET_ADULT_USERS_POSTGRES;
 preparedStatement = conn.prepareStatement(sql);
 ```
 
 ---
 
-## Executor Bare-Metal
+## Bare-Metal Executor
 
-### Arquitetura do Executor
+### Executor Architecture
 
 ```mermaid
 graph TB
@@ -569,21 +569,21 @@ graph TB
 
 ```java
 // ✅ ZERO-REFLECTION (Bare-Metal)
-List<Usuario> users = executor.query(query, rs -> 
-    new Usuario(rs.getString("id"), rs.getString("nome"))
+List<User> users = executor.query(query, rs -> 
+    new User(rs.getString("id"), rs.getString("name"))
 );
 
-// Como funciona:
-// 1. JIT compila a lambda inline
-// 2. Sem reflection, apenas bytecode direto
-// 3. Resultado: Performance de C
+// How it works:
+// 1. JIT compiles the lambda inline
+// 2. No reflection, just direct bytecode
+// 3. Result: C-like Performance
 ```
 
-**Comparação:**
+**Comparison:**
 
 ```mermaid
 graph LR
-    subgraph "Com Reflection"
+    subgraph "With Reflection"
         A["ResultSet.getObject"]
         B["Field.setAccessible"]
         C["Field.set(obj, value)"]
@@ -596,7 +596,7 @@ graph LR
     end
     
     A -.->|10x Overhead| E
-    B -.->|Não necessário| F
+    B -.->|Not needed| F
     
     style E fill:#4caf50
     style F fill:#4caf50
@@ -604,9 +604,9 @@ graph LR
 
 ---
 
-## Testes e Cobertura
+## Tests and Coverage
 
-### Estratégia de Testes
+### Testing Strategy
 
 ```mermaid
 graph TB
@@ -636,7 +636,7 @@ graph TB
     F -.-> I
 ```
 
-### Cobertura Alcançada
+### Coverage Achieved
 
 ```
 Tests Run:      65
@@ -647,9 +647,9 @@ Duration:       0.688s
 Code Coverage:  ~92% (43 classes)
 ```
 
-### Casos de Teste
+### Test Cases
 
-| Categoria | Testes | Cobertura |
+| Category | Tests | Coverage |
 |-----------|--------|-----------|
 | **Frontend** | 4 | Builder, Expressions, AST |
 | **Middle-End** | 6 | SSA, CSE, Optimization |
@@ -659,80 +659,80 @@ Code Coverage:  ~92% (43 classes)
 
 ---
 
-## Exemplos de Uso
+## Usage Examples
 
-### Exemplo 1: Query Simples
+### Example 1: Simple Query
 
 ```java
-// 1. CONSTRUIR
-Statement query = Sql.select("id", "nome", "idade")
-    .from("usuarios")
-    .where(Col.of("idade").gt(18))
+// 1. BUILD
+Statement query = Sql.select("id", "name", "age")
+    .from("users")
+    .where(Col.of("age").gt(18))
     .build();
 
-// 2. TRANSPILAR (Multi-Dialeto)
+// 2. TRANSPILE (Multi-Dialect)
 FastSqlBuffer bufferPostgres = new FastSqlBuffer();
 new DialectTranspiler(Dialect.POSTGRES).generate(query, bufferPostgres);
 String sqlPostgres = bufferPostgres.getSql();
-// "SELECT \"id\", \"nome\", \"idade\" FROM \"usuarios\" WHERE \"idade\" > ?"
+// "SELECT \"id\", \"name\", \"age\" FROM \"users\" WHERE \"age\" > ?"
 
 FastSqlBuffer bufferSqlite = new FastSqlBuffer();
 new DialectTranspiler(Dialect.SQLITE).generate(query, bufferSqlite);
 String sqlSqlite = bufferSqlite.getSql();
-// "SELECT \"id\", \"nome\", \"idade\" FROM \"usuarios\" WHERE \"idade\" > ?"
+// "SELECT \"id\", \"name\", \"age\" FROM \"users\" WHERE \"age\" > ?"
 
-// 3. EXECUTAR
+// 3. EXECUTE
 try (Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:")) {
     BareMetalExecutor executor = new BareMetalExecutor(conn, Dialect.SQLITE);
     
     // Zero-Reflection Row Mapping
-    List<Usuario> usuarios = executor.query(query, rs -> 
-        new Usuario(rs.getString("id"), rs.getString("nome"), rs.getInt("idade"))
+    List<User> users = executor.query(query, rs -> 
+        new User(rs.getString("id"), rs.getString("name"), rs.getInt("age"))
     );
 }
 ```
 
-### Exemplo 2: Otimização SSA em Ação
+### Example 2: SSA Optimization in Action
 
 ```java
-// Query com redundância
+// Query with redundancy
 Expr condition = Col.of("status").eq("ACTIVE")
-    .and(Col.of("status").eq("ACTIVE"));  // ← Redundância
+    .and(Col.of("status").eq("ACTIVE"));  // ← Redundancy
 
-// 1. Converter para SSA IR
+// 1. Convert to SSA IR
 AstToIrPass irPass = new AstToIrPass();
 IrVar rootVar = irPass.visit(condition);
-System.out.println("Instruções Bruta: " + irPass.getInstructions().size());
-// Output: 5 instruções
+System.out.println("Raw Instructions: " + irPass.getInstructions().size());
+// Output: 5 instructions
 
-// 2. Otimizar
+// 2. Optimize
 var optimizedIr = IrOptimizer.optimize(irPass.getInstructions());
-System.out.println("Instruções Otimizada: " + optimizedIr.size());
-// Output: 3 instruções (CSE reduziu de 5 → 3)
+System.out.println("Optimized Instructions: " + optimizedIr.size());
+// Output: 3 instructions (CSE reduced from 5 → 3)
 
-// 3. Reconstruir AST
+// 3. Reconstruct AST
 Expr optimizedExpr = IrToAstPass.reconstruct(optimizedIr, rootVar);
 
-// 4. Transpile resultado
+// 4. Transpile result
 FastSqlBuffer buffer = new FastSqlBuffer();
 new DialectTranspiler(Dialect.POSTGRES).visit(optimizedExpr, buffer);
-System.out.println("SQL Final: " + buffer.getSql());
-// Output: "status" = ? (Sem redundância!)
+System.out.println("Final SQL: " + buffer.getSql());
+// Output: "status" = ? (Without redundancy!)
 ```
 
-### Exemplo 3: AOT Compilation
+### Example 3: AOT Compilation
 
 ```java
-// Build-Time: Gerar queries pré-compiladas
+// Build-Time: Generate pre-compiled queries
 // $ bash aot_baresql.sh
 
-// Runtime: Usar diretamente
+// Runtime: Use directly
 import com.baresql.aot.PrecompiledQueries;
 
 public class Application {
     public void findActiveUsers() {
-        // ZERO overhead - SQL já otimizado!
-        String sql = PrecompiledQueries.GET_USUARIOS_MAIORES_IDADE_POSTGRES;
+        // ZERO overhead - SQL already optimized!
+        String sql = PrecompiledQueries.GET_ADULT_USERS_POSTGRES;
         
         try (Connection conn = getConnection()) {
             PreparedStatement stmt = conn.prepareStatement(sql);
@@ -740,7 +740,7 @@ public class Application {
             ResultSet rs = stmt.executeQuery();
             
             while (rs.next()) {
-                System.out.println(rs.getString("nome"));
+                System.out.println(rs.getString("name"));
             }
         }
     }
@@ -749,42 +749,42 @@ public class Application {
 
 ---
 
-## Diagrama de Estados
+## State Diagram
 
 ```mermaid
 stateDiagram-v2
-    [*] --> BuilderPhase: Usuário inicia query
+    [*] --> BuilderPhase: User starts query
     
-    BuilderPhase --> AstPhase: .build() chamado
+    BuilderPhase --> AstPhase: .build() called
     state BuilderPhase {
         [*] --> SelectBuilding
         SelectBuilding --> FromBuilding: .from()
         FromBuilding --> WhereBuilding: .where()
-        WhereBuilding --> Ready: Todos os passos ok
+        WhereBuilding --> Ready: All steps ok
     }
     
-    AstPhase --> OptimizationPhase: AST pronta
+    AstPhase --> OptimizationPhase: AST ready
     state AstPhase {
         [*] --> Parsed
-        Parsed --> Valid: Validação OK
+        Parsed --> Valid: Validation OK
     }
     
-    OptimizationPhase --> TranspilationPhase: SSA otimizado
+    OptimizationPhase --> TranspilationPhase: SSA optimized
     state OptimizationPhase {
         [*] --> ConvertToIR: AstToIrPass
         ConvertToIR --> ApplyCSE: IrOptimizer
-        ApplyCSE --> ApplyIdempotence: Booleana
+        ApplyCSE --> ApplyIdempotence: Boolean
         ApplyIdempotence --> ReconstructAST: IrToAstPass
     }
     
-    TranspilationPhase --> ExecutionPhase: SQL string pronto
+    TranspilationPhase --> ExecutionPhase: SQL string ready
     state TranspilationPhase {
         [*] --> SelectDialect
         SelectDialect --> TranspileSQL: DialectTranspiler
         TranspileSQL --> BufferSQL: FastSqlBuffer
     }
     
-    ExecutionPhase --> ResultsPhase: Query executada
+    ExecutionPhase --> ResultsPhase: Query executed
     state ExecutionPhase {
         [*] --> PrepareStatement
         PrepareStatement --> BindParams
@@ -797,11 +797,11 @@ stateDiagram-v2
 
 ---
 
-## Fluxo Completo de Execução
+## Full Execution Flow
 
 ```mermaid
 sequenceDiagram
-    participant User as Código do Usuário
+    participant User as User Code
     participant Builder as Sql Builder
     participant AST as AST Nodes
     participant IR as SSA IR
@@ -814,86 +814,86 @@ sequenceDiagram
     User->>Builder: select("id").from("users")
     Builder->>AST: Create AST
     
-    Note over AST: Frontend Completo
+    Note over AST: Frontend Complete
     
     User->>IR: AstToIrPass.visit(ast)
-    IR->>Opt: Converter para SSA
-    Opt->>Opt: Aplicar CSE
-    Opt->>Opt: Aplicar Idempotência
+    IR->>Opt: Convert to SSA
+    Opt->>Opt: Apply CSE
+    Opt->>Opt: Apply Idempotence
     
-    Note over Opt: Middle-End Completo
+    Note over Opt: Middle-End Complete
     
     User->>Trans: DialectTranspiler.generate()
-    Trans->>Trans: Selecionar Dialeto
-    Trans->>Trans: Gerar SQL String
+    Trans->>Trans: Select Dialect
+    Trans->>Trans: Generate SQL String
     
-    Note over Trans: Back-End Completo
+    Note over Trans: Back-End Complete
     
     User->>Exec: executor.query(sql, rowMapper)
     Exec->>JDBC: prepareStatement(sql)
     JDBC->>DB: Connection.executeQuery()
     DB-->>JDBC: ResultSet
-    JDBC-->>Exec: Mapear com Lambda
-    Exec-->>User: List<T> resultados
+    JDBC-->>Exec: Map with Lambda
+    Exec-->>User: List<T> results
     
-    Note over User,DB: Runtime Completo
+    Note over User,DB: Runtime Complete
 ```
 
 ---
 
-## Análise de Complexidade
+## Complexity Analysis
 
-### Complexidade Temporal
+### Time Complexity
 
-| Operação | Complexidade | Nota |
+| Operation | Complexity | Note |
 |----------|-------------|------|
-| Construir AST | O(n) | n = num expressões |
-| Converter para SSA | O(n) | Linear pass |
+| Build AST | O(n) | n = num expressions |
+| Convert to SSA | O(n) | Linear pass |
 | CSE Optimization | O(n log n) | Hash map lookups |
-| Transpilar | O(n) | Tree traversal |
-| Executar Query | O(m) | m = resultados |
+| Transpile | O(n) | Tree traversal |
+| Execute Query | O(m) | m = results |
 
-**Onde n = nodes na árvore, m = rows retornadas**
+**Where n = nodes in the tree, m = returned rows**
 
-### Complexidade Espacial
+### Space Complexity
 
-| Estrutura | Espaço | Nota |
+| Structure | Space | Note |
 |-----------|--------|------|
-| AST | O(n) | Proporcional à complexidade da query |
-| SSA IR | O(n) | Mesmo tamanho da AST |
-| Optimized IR | O(n - d) | d = eliminações por CSE |
+| AST | O(n) | Proportional to query complexity |
+| SSA IR | O(n) | Same size as AST |
+| Optimized IR | O(n - d) | d = eliminations by CSE |
 
 ---
 
-## Roadmap Futuro
+## Future Roadmap
 
-### v1.1 (Próxima Release)
-- [ ] Support para JOINs complexos
+### v1.1 (Next Release)
+- [ ] Support for complex JOINs
 - [ ] Window Functions
-- [ ] Subqueries otimizadas
-- [ ] Índice hint suportes
+- [ ] Optimized Subqueries
+- [ ] Index hint support
 
 ### v2.0 (2026)
 - [ ] Query Cost Estimation
 - [ ] Parallel Execution
-- [ ] Query Caching Inteligente
-- [ ] Machine Learning para otimizações
+- [ ] Smart Query Caching
+- [ ] Machine Learning for optimizations
 
 ---
 
-## Conclusão
+## Conclusion
 
-O **Bare-SQL Engine** demonstra como compiladores modernos (SSA, CSE) podem ser aplicados ao SQL para obter:
+The **Bare-SQL Engine** demonstrates how modern compilers (SSA, CSE) can be applied to SQL to achieve:
 
-✅ **Performance**: -89% de overhead com AOT  
-✅ **Portabilidade**: Multi-dialeto seamless  
-✅ **Segurança**: Type-safe em compile-time  
-✅ **Manutenibilidade**: Zero reflection, código explícito  
-✅ **Testabilidade**: 65 testes, 92% cobertura  
+✅ **Performance**: -89% overhead with AOT  
+✅ **Portability**: Seamless multi-dialect  
+✅ **Safety**: Compile-time type-safe  
+✅ **Maintainability**: Zero reflection, explicit code  
+✅ **Testability**: 65 tests, 92% coverage  
 
 ---
 
 **Gemirson Dos Santos Silva**  
-**Matematico e Engenheiro de Otimização**  
-*Criador da Arquitetura Bare-SQL*  
-7 de maio de 2026
+**Mathematician and Optimization Engineer**  
+*Creator of the Bare-SQL Architecture*  
+May 7, 2026

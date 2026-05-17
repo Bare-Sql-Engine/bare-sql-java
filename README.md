@@ -1,149 +1,149 @@
-# Documentação Arquitetural: Bare-SQL Engine
+# Architectural Documentation: Bare-SQL Engine
 
-Bem-vindo à documentação arquitetural oficial do **Bare-SQL Engine**. Este documento descreve as decisões de design, os componentes principais e os fluxos de dados do motor, com o objetivo de fornecer uma visão aprofundada de como o sistema funciona sob o capô.
-
----
-
-## 1. Visão Geral e Filosofia
-
-O **Bare-SQL Engine** nasceu da necessidade de se ter um motor de banco de dados e gerador de queries que seja **rápido**, **sem reflexão (zero-reflection)**, **seguro em tempo de compilação (AOT - Ahead-Of-Time)** e **agnóstico a dialetos**.
-
-A principal motivação é eliminar as perdas de performance comuns em ORMs tradicionais (como o Hibernate) e a complexidade de manutenção de suítes de testes pesadas (Testcontainers) ou inconsistentes (H2 Database). O Bare-SQL atinge isso através de uma abordagem baseada em **Compiladores**.
-
-### Decisões de Design:
-- **Separação de Fases (Frontend, Middle-end, Backend):** Inspirado em compiladores como LLVM, o motor divide o trabalho em:
-  - **Frontend:** Builder Fluente construindo a AST (Abstract Syntax Tree).
-  - **Middle-end:** Transformação para IR (Intermediate Representation) e otimizações baseadas em SSA (Static Single Assignment) como CSE (Common Subexpression Elimination).
-  - **Backend:** Transpilação de AST para a sintaxe específica do banco (Dialect) e compilação AOT.
-- **Zero-Reflection Row Mapping:** Em vez de usar reflexão Java (que é custosa) para mapear resultados `ResultSet` para entidades, usamos lambdas funcionais diretas.
-- **Transpilação Agnóstica:** As queries são construídas em uma AST neutra e transpiladas dinamicamente para PostgreSQL, SQLite, MySQL, etc., o que viabiliza o uso de SQLite em memória para 95% dos testes unitários/integração.
-- **AOT (Ahead-of-Time):** Capacidade de pré-compilar e resolver as árvores de SQL durante o build time, gerando strings literais constantes, o que zera o overhead de montagem de string em runtime.
+Welcome to the official architectural documentation of the **Bare-SQL Engine**. This document describes the design decisions, main components, and data flows of the engine, aiming to provide an in-depth view of how the system works under the hood.
 
 ---
 
-## 2. Arquitetura do Sistema
+## 1. Overview and Philosophy
 
-O diagrama abaixo ilustra o fluxo de dados desde a chamada do desenvolvedor até a execução no banco de dados.
+The **Bare-SQL Engine** was born from the need to have a database engine and query generator that is **fast**, **zero-reflection**, **compile-time safe (AOT - Ahead-Of-Time)**, and **dialect-agnostic**.
+
+The main motivation is to eliminate performance losses common in traditional ORMs (like Hibernate) and the complexity of maintaining heavy testing suites (Testcontainers) or inconsistent ones (H2 Database). Bare-SQL achieves this through a **Compiler**-based approach.
+
+### Design Decisions:
+- **Phase Separation (Frontend, Middle-end, Backend):** Inspired by compilers like LLVM, the engine divides the work into:
+  - **Frontend:** Fluent Builder constructing the AST (Abstract Syntax Tree).
+  - **Middle-end:** Transformation to IR (Intermediate Representation) and SSA (Static Single Assignment)-based optimizations like CSE (Common Subexpression Elimination).
+  - **Backend:** AST Transpilation to the specific database syntax (Dialect) and AOT compilation.
+- **Zero-Reflection Row Mapping:** Instead of using Java reflection (which is costly) to map `ResultSet` results to entities, we use direct functional lambdas.
+- **Agnostic Transpilation:** Queries are built in a neutral AST and dynamically transpiled to PostgreSQL, SQLite, MySQL, etc., which makes it feasible to use in-memory SQLite for 95% of unit/integration tests.
+- **AOT (Ahead-of-Time):** Ability to pre-compile and resolve SQL trees during build time, generating constant literal strings, which zeroes out string assembly overhead at runtime.
+
+---
+
+## 2. System Architecture
+
+The diagram below illustrates the data flow from the developer's call to the execution in the database.
 
 ```mermaid
 flowchart TD
-    A[Desenvolvedor / Aplicação] -->|Fluent API| B(Frontend: AST Builder)
-    B -->|Gera AST Bruta| C{Fase de Compilação?}
+    A[Developer / Application] -->|Fluent API| B(Frontend: AST Builder)
+    B -->|Generates Raw AST| C{Compilation Phase?}
     
-    C -->|Modo Runtime| D[Backend: Dialect Transpiler]
-    C -->|Modo Optimizer/AOT| E[Middle-End: AstToIrPass]
+    C -->|Runtime Mode| D[Backend: Dialect Transpiler]
+    C -->|Optimizer/AOT Mode| E[Middle-End: AstToIrPass]
     
-    E -->|Gera IR| F[Otimizador IR SSA / CSE]
-    F -->|IR Otimizada| G[Middle-End: IrToAstPass]
-    G -->|AST Otimizada| H{AOT ou Runtime?}
+    E -->|Generates IR| F[SSA / CSE IR Optimizer]
+    F -->|Optimized IR| G[Middle-End: IrToAstPass]
+    G -->|Optimized AST| H{AOT or Runtime?}
     
-    H -->|AOT Build Time| I[Geração de Constantes Java]
+    H -->|AOT Build Time| I[Java Constants Generation]
     H -->|Runtime| D
     
-    D -->|Escreve em| J(FastSqlBuffer)
+    D -->|Writes to| J(FastSqlBuffer)
     J -->|SQL + Dialect| K[BareMetalExecutor]
-    K -->|JDBC PreparedStatement| L[(Banco de Dados Relacional)]
+    K -->|JDBC PreparedStatement| L[(Relational Database)]
     L -->|ResultSet| M[Zero-Reflection Mapper]
-    M -->|Instâncias| A
+    M -->|Instances| A
 ```
 
 ---
 
-## 3. Ciclo de Vida da Query
+## 3. Query Lifecycle
 
-A vida de uma query dentro do Bare-SQL passa por várias transformações de estado para garantir segurança, otimização e compatibilidade.
+The life of a query inside Bare-SQL goes through several state transformations to ensure safety, optimization, and compatibility.
 
 ```mermaid
 stateDiagram-v2
     [*] --> RawExpression: Sql.select()
-    RawExpression --> AST_Construida: .build()
+    RawExpression --> Built_AST: .build()
     
-    state AST_Construida {
-        [*] --> Analise
-        Analise --> Valida
+    state Built_AST {
+        [*] --> Analysis
+        Analysis --> Validation
     }
     
-    AST_Construida --> IR_Representation: AstToIrPass.visit()
+    Built_AST --> IR_Representation: AstToIrPass.visit()
     
     state IR_Representation {
-        [*] --> Deteccao_Redundancias (CSE)
-        Deteccao_Redundancias --> Avaliacao_Constantes
-        Avaliacao_Constantes --> Remocao_Codigo_Morto
+        [*] --> Redundancy_Detection (CSE)
+        Redundancy_Detection --> Constant_Evaluation
+        Constant_Evaluation --> Dead_Code_Removal
     }
     
-    IR_Representation --> AST_Otimizada: IrToAstPass.reconstruct()
-    AST_Otimizada --> Transpilacao: DialectTranspiler.generate()
+    IR_Representation --> Optimized_AST: IrToAstPass.reconstruct()
+    Optimized_AST --> Transpilation: DialectTranspiler.generate()
     
-    state Transpilacao {
-        [*] --> Analise_Dialeto
-        Analise_Dialeto --> Resolucao_Especificidades (ex: JSON)
-        Resolucao_Especificidades --> Escrita_Buffer (FastSqlBuffer)
+    state Transpilation {
+        [*] --> Dialect_Analysis
+        Dialect_Analysis --> Specificity_Resolution (ex: JSON)
+        Specificity_Resolution --> Buffer_Write (FastSqlBuffer)
     }
     
-    Transpilacao --> SQL_Dialeto_Pronto: Buffer Completo
-    SQL_Dialeto_Pronto --> Execucao_JDBC: BareMetalExecutor
-    Execucao_JDBC --> [*]
+    Transpilation --> Ready_Dialect_SQL: Complete Buffer
+    Ready_Dialect_SQL --> JDBC_Execution: BareMetalExecutor
+    JDBC_Execution --> [*]
 ```
 
-### Detalhamento das Transições:
-1. **Frontend (AST):** Os nós da árvore (`Nodes.Select`, `Nodes.BinaryExpr`, etc.) representam a intenção pura, sem amarras com a sintaxe do banco de dados.
-2. **Otimização (IR & SSA):** A passagem para IR (Intermediate Representation) mapeia variáveis virtuais e remove duplicações através da eliminação de subexpressões comuns (CSE). Exemplo: `idade > 18 AND idade > 18` vira apenas `idade > 18`.
-3. **Backend (Transpiler):** O `DialectTranspiler` pega a AST otimizada e decide regras granulares. Se for SQLite e houver um campo JSON, ele gera `json_extract()`; se for Postgres, ele gera o operador `->>`.
+### Transition Details:
+1. **Frontend (AST):** The tree nodes (`Nodes.Select`, `Nodes.BinaryExpr`, etc.) represent the pure intent, unattached to the database syntax.
+2. **Optimization (IR & SSA):** The pass to IR (Intermediate Representation) maps virtual variables and removes duplications through common subexpression elimination (CSE). Example: `age > 18 AND age > 18` becomes just `age > 18`.
+3. **Backend (Transpiler):** The `DialectTranspiler` takes the optimized AST and decides granular rules. If it's SQLite and there is a JSON field, it generates `json_extract()`; if it's Postgres, it generates the `->>` operator.
 
 ---
 
-## 4. O Fluxo de Execução (Executor)
+## 4. The Execution Flow (Executor)
 
-O `BareMetalExecutor` foi projetado para extrair cada gota de performance do JDBC. Ele gerencia as conexões e os fluxos de dados em lote.
+The `BareMetalExecutor` was designed to extract every drop of performance from JDBC. It manages connections and batch data flows.
 
 ```mermaid
 sequenceDiagram
-    participant App as Aplicação
+    participant App as Application
     participant Builder as Sql Builder
     participant Transpiler as DialectTranspiler
     participant Executor as BareMetalExecutor
-    participant JDBC as Driver JDBC (Conn/PS)
-    participant DB as Banco de Dados
+    participant JDBC as JDBC Driver (Conn/PS)
+    participant DB as Database
     
-    App->>Builder: Sql.select("id", "nome").from("usuarios").build()
+    App->>Builder: Sql.select("id", "name").from("users").build()
     Builder-->>App: AST Statement
     
     App->>Executor: query(AST, rowMapper)
     Executor->>Transpiler: generate(AST, buffer)
-    Transpiler-->>Executor: SQL String Pronta (ex: Postgres)
+    Transpiler-->>Executor: Ready SQL String (ex: Postgres)
     
     Executor->>JDBC: prepareStatement(SQL)
     JDBC-->>Executor: PreparedStatement
     
     Executor->>JDBC: executeQuery()
-    JDBC->>DB: Executa Consulta
-    DB-->>JDBC: Dados
+    JDBC->>DB: Executes Query
+    DB-->>JDBC: Data
     JDBC-->>Executor: ResultSet
     
-    loop Para cada linha
+    loop For each row
         Executor->>App: rowMapper.map(ResultSet)
-        Note right of App: A conversão é feita sem <br/>Reflection, usando lambdas.
-        App-->>Executor: Entidade (ex: Usuario)
+        Note right of App: Conversion is done without <br/>Reflection, using lambdas.
+        App-->>Executor: Entity (ex: User)
     end
     
-    Executor-->>App: List<Usuario>
+    Executor-->>App: List<User>
 ```
 
 ---
 
-## 5. Destaques das Decisões Técnicas
+## 5. Technical Decision Highlights
 
-### Por que não usar Hibernate?
-O Hibernate é flexível, mas o custo dessa flexibilidade é a utilização massiva de *Java Reflection*, proxies, e um "L1 Cache" complexo que resulta em consumo imprevisível de memória e latência de CPU. O **Bare-SQL** resolve o RowMapping injetando explicitamente uma função lambda funcional (Zero-Reflection), tornando o fluxo de dados em um *pipeline* previsível.
+### Why not use Hibernate?
+Hibernate is flexible, but the cost of this flexibility is the massive use of *Java Reflection*, proxies, and a complex "L1 Cache" that results in unpredictable memory consumption and CPU latency. **Bare-SQL** solves RowMapping by explicitly injecting a functional lambda (Zero-Reflection), making the data flow a predictable *pipeline*.
 
-### Estratégia de Testes (SQLite Mocks)
-Com o Dialect Transpiler, os testes de CI/CD podem trocar o alvo de compilação de `POSTGRES` para `SQLITE` na hora da injeção de dependência. Isso substitui em ~95% dos casos o H2 Database ou Testcontainers, executando na memória nativa em frações de milissegundos sem perder precisão nas conversões estruturais.
+### Testing Strategy (SQLite Mocks)
+With the Dialect Transpiler, CI/CD tests can swap the compilation target from `POSTGRES` to `SQLITE` at dependency injection time. This replaces H2 Database or Testcontainers in ~95% of cases, running in native memory in fractions of milliseconds without losing precision in structural conversions.
 
 ### Ahead-of-Time Compilation (AOT)
-Para caminhos críticos ("Hot Paths") na aplicação, a geração do SQL e otimização da AST é feita por um gerador (Mojo Maven/Gradle) que cospe uma classe Java com `public static final String`. Durante o runtime, o motor pula toda a etapa de alocação de buffer e transpilação, batendo direto no JDBC com a string otimizada e imutável.
+For critical paths ("Hot Paths") in the application, SQL generation and AST optimization is done by a generator (Maven/Gradle Mojo) that spits out a Java class with `public static final String`. During runtime, the engine skips the entire buffer allocation and transpilation step, hitting JDBC directly with the optimized and immutable string.
 
 ---
 
-## 6. Conclusão
+## 6. Conclusion
 
-A arquitetura orientada a compiladores do `bare-sql-engine` o coloca como uma ferramenta moderna, combinando a fluidez das APIs orientadas a objetos com o rigor matemático das otimizações de IR e a performance bruta das execuções estáticas (Bare-Metal e AOT).
+The compiler-driven architecture of `bare-sql-engine` positions it as a modern tool, combining the fluidity of object-oriented APIs with the mathematical rigor of IR optimizations and the raw performance of static executions (Bare-Metal and AOT).
