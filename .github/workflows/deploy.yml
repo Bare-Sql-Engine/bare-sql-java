@@ -1,0 +1,38 @@
+name: Deploy to Maven Repository
+
+on:
+  push:
+    tags:
+      - 'v*' # Dispara o deploy apenas ao criar tags que comecem com 'v' (ex: v1.0.0, v1.2.3)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # Necessário para publicar no GitHub Packages
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Necessário para o git-commit-id-maven-plugin conseguir ler o histórico
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          server-id: github # Deve corresponder ao <id> dentro do <distributionManagement> no pom.xml
+          settings-path: ${{ github.workspace }} # O setup-java vai gerar um settings.xml neste caminho
+
+      - name: Atualizar versão no pom.xml usando a Tag
+        # Remove o 'v' inicial da tag (v1.0.0 -> 1.0.0) e seta a versão no pom
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          mvn versions:set -DnewVersion=$VERSION -DgenerateBackupPoms=false
+
+      - name: Build e Deploy para o GitHub Packages
+        run: mvn -B deploy -s $GITHUB_WORKSPACE/settings.xml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
