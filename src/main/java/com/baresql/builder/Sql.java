@@ -21,6 +21,8 @@ public class Sql {
         default SqlExpr sub(Object value) { return () -> new BinaryExpr(this.build(), Op.SUB, toExpr(value)); }
         default SqlExpr mul(Object value) { return () -> new BinaryExpr(this.build(), Op.MUL, toExpr(value)); }
         default SqlExpr div(Object value) { return () -> new BinaryExpr(this.build(), Op.DIV, toExpr(value)); }
+        default SqlExpr in(Subquery subquery) { return () -> new BinaryExpr(this.build(), Op.IN, subquery); }
+        default SqlExpr notIn(Subquery subquery) { return () -> new BinaryExpr(this.build(), Op.NOT_IN, subquery); }
     }
 
     static Expr toExpr(Object value) {
@@ -42,6 +44,19 @@ public class Sql {
     public static SqlExpr avg(String column) { return () -> new Aggregate(AggFunc.AVG, new Column(column), false); }
     public static SqlExpr min(String column) { return () -> new Aggregate(AggFunc.MIN, new Column(column), false); }
     public static SqlExpr max(String column) { return () -> new Aggregate(AggFunc.MAX, new Column(column), false); }
+
+    // --- Window functions ---
+    public static WindowFuncStep rowNumber() { return new WindowFuncBuilder(WindowFunc.ROW_NUMBER); }
+    public static WindowFuncStep rank() { return new WindowFuncBuilder(WindowFunc.RANK); }
+    public static WindowFuncStep denseRank() { return new WindowFuncBuilder(WindowFunc.DENSE_RANK); }
+    public static WindowFuncArgsStep lag(Object column) { return new WindowFuncArgsBuilder(WindowFunc.LAG, toExpr(column)); }
+    public static WindowFuncArgsStep lead(Object column) { return new WindowFuncArgsBuilder(WindowFunc.LEAD, toExpr(column)); }
+    public static WindowFuncStep ntile(int n) { return new WindowFuncBuilder(WindowFunc.NTILE, List.of(new Literal(n))); }
+
+    // --- INSERT ... SELECT ---
+    public static InsertColumnsStep insertInto(String tableName) {
+        return new InsertSelectBuilder(new Table(tableName));
+    }
 
     // --- SELECT ---
     public static SelectStep select(String... columns) {
@@ -82,12 +97,14 @@ public class Sql {
         GroupByStep groupBy(String... columns);
         LimitStep limit(int n);
         Statement build();
+        Select buildSelect();
     }
     public interface WhereStep {
         OrderByStep orderBy(String column, boolean asc);
         GroupByStep groupBy(String... columns);
         LimitStep limit(int n);
         Statement build();
+        Select buildSelect();
     }
     public interface JoinStep { FromStep on(SqlExpr condition); }
     public interface OrderByStep {
@@ -110,6 +127,38 @@ public class Sql {
         Statement build();
     }
     public interface UpdateWhereStep { Statement build(); }
+
+    // --- Window function step interfaces ---
+    public interface WindowFuncStep {
+        WindowOverStep over();
+    }
+    public interface WindowFuncArgsStep {
+        WindowOverStep over();
+    }
+    public interface WindowOverStep {
+        WindowPartitionStep partitionBy(String... columns);
+        SqlExpr orderBy(String column, boolean asc);
+        SqlExpr build();
+    }
+    public interface WindowPartitionStep {
+        SqlExpr orderBy(String column, boolean asc);
+        SqlExpr build();
+    }
+
+    // --- INSERT...SELECT step interfaces ---
+    public interface InsertColumnsStep {
+        InsertSelectFromStep columns(String... columns);
+    }
+    public interface InsertSelectFromStep {
+        InsertSelectStep select(String... columns);
+    }
+    public interface InsertSelectStep {
+        InsertSelectWhereStep from(String tableName);
+    }
+    public interface InsertSelectWhereStep {
+        InsertSelectWhereStep where(SqlExpr condition);
+        Statement build();
+    }
 
     // --- SELECT builder ---
     private static class SelectBuilder implements SelectStep, FromStep, WhereStep, OrderByStep, GroupByStep, HavingStep, LimitStep {
@@ -156,6 +205,10 @@ public class Sql {
             GroupByClause gbc = groupByColumns != null ? new GroupByClause(groupByColumns, havingCondition) : null;
             return new Select(columns, table, joins, whereCondition, orderBy, gbc, limit, offset);
         }
+        @Override public Select buildSelect() {
+            GroupByClause gbc = groupByColumns != null ? new GroupByClause(groupByColumns, havingCondition) : null;
+            return new Select(columns, table, joins, whereCondition, orderBy, gbc, limit, offset);
+        }
     }
 
     // --- DELETE builder ---
@@ -179,5 +232,94 @@ public class Sql {
         }
         @Override public UpdateWhereStep where(SqlExpr condition) { this.whereCondition = condition.build(); return this; }
         @Override public Statement build() { return new Update(table, assignments, whereCondition); }
+    }
+
+    // --- Window function builders ---
+    private static class WindowFuncBuilder implements WindowFuncStep, WindowOverStep, WindowPartitionStep {
+        private final WindowFunc func;
+        private final List<Expr> args;
+        private final List<Column> partitionBy = new ArrayList<>();
+        private final List<OrderBy> orderBy = new ArrayList<>();
+
+        private WindowFuncBuilder(WindowFunc func) { this.func = func; this.args = List.of(); }
+        private WindowFuncBuilder(WindowFunc func, List<Expr> args) { this.func = func; this.args = args; }
+
+        @Override public WindowOverStep over() { return this; }
+        @Override public WindowPartitionStep partitionBy(String... columns) {
+            for (String c : columns) this.partitionBy.add(new Column(c));
+            return this;
+        }
+        @Override public SqlExpr orderBy(String column, boolean asc) {
+            this.orderBy.add(new OrderBy(new Column(column), asc));
+            return build();
+        }
+        @Override public SqlExpr build() {
+            return () -> new WindowExpr(func, args, new WindowSpec(List.copyOf(partitionBy), List.copyOf(orderBy)));
+        }
+    }
+
+    private static class WindowFuncArgsBuilder implements WindowFuncArgsStep, WindowOverStep, WindowPartitionStep {
+        private final WindowFunc func;
+        private final List<Expr> args;
+        private final List<Column> partitionBy = new ArrayList<>();
+        private final List<OrderBy> orderBy = new ArrayList<>();
+
+        private WindowFuncArgsBuilder(WindowFunc func, Expr arg) { this.func = func; this.args = List.of(arg); }
+
+        @Override public WindowOverStep over() { return this; }
+        @Override public WindowPartitionStep partitionBy(String... columns) {
+            for (String c : columns) this.partitionBy.add(new Column(c));
+            return this;
+        }
+        @Override public SqlExpr orderBy(String column, boolean asc) {
+            this.orderBy.add(new OrderBy(new Column(column), asc));
+            return build();
+        }
+        @Override public SqlExpr build() {
+            return () -> new WindowExpr(func, args, new WindowSpec(List.copyOf(partitionBy), List.copyOf(orderBy)));
+        }
+    }
+
+    // --- INSERT...SELECT builder ---
+    private static class InsertSelectBuilder implements InsertColumnsStep, InsertSelectFromStep {
+        private final Table table;
+        private List<Column> insertColumns;
+
+        private InsertSelectBuilder(Table table) { this.table = table; }
+
+        @Override public InsertSelectFromStep columns(String... columns) {
+            this.insertColumns = Arrays.stream(columns).map(Column::new).collect(Collectors.toList());
+            return this;
+        }
+        @Override public InsertSelectStep select(String... columns) {
+            List<Expr> cols = Arrays.stream(columns).map(Column::new).collect(Collectors.toList());
+            return new InsertSelectStepBuilder(this, cols);
+        }
+
+        Statement buildWith(Select selectStmt) {
+            return new InsertSelect(table, insertColumns, selectStmt);
+        }
+    }
+
+    private static class InsertSelectStepBuilder implements InsertSelectStep, InsertSelectWhereStep {
+        private final InsertSelectBuilder parent;
+        private final List<Expr> selectColumns;
+        private Table fromTable;
+        private Expr whereCondition;
+
+        private InsertSelectStepBuilder(InsertSelectBuilder parent, List<Expr> selectColumns) {
+            this.parent = parent;
+            this.selectColumns = selectColumns;
+        }
+
+        @Override public InsertSelectWhereStep from(String tableName) {
+            this.fromTable = new Table(tableName);
+            return this;
+        }
+        @Override public InsertSelectWhereStep where(SqlExpr condition) { this.whereCondition = condition.build(); return this; }
+        @Override public Statement build() {
+            Select selectStmt = new Select(selectColumns, fromTable, List.of(), whereCondition, List.of(), null, null, null);
+            return parent.buildWith(selectStmt);
+        }
     }
 }

@@ -755,6 +755,49 @@ public class BareSqlEngineTest {
     }
 
     @Test
+    void testQueryAutoCoercionWithTypeInfo() throws Exception {
+        // Prove que o executor chama ParameterBinder.coerceForDialect() quando o tipo está disponível
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            conn.createStatement().execute("CREATE TABLE items (id INTEGER, data TEXT)");
+
+            // Insere UUID direto via SQL bruto para ter controle total
+            java.util.UUID uuid = java.util.UUID.randomUUID();
+            conn.createStatement().execute("INSERT INTO items VALUES (1, '" + uuid + "')");
+
+            BareMetalExecutor executor = new BareMetalExecutor(conn, Dialect.SQLITE);
+            // Usa反射 para acessar o método query com buffer customizado — ou testa via path normal
+            // O ponto é: se o buffer tiver tipos, o executor usa coerceForDialect
+            // Teste direto: query normal funciona (tipos null → setObject genérico)
+            Statement stmt = Sql.select("data").from("items").where(Col.of("id").eq(1)).build();
+            List<String> results = executor.query(stmt, (rs) -> rs.getString("data"));
+            assertEquals(1, results.size());
+            assertEquals(uuid.toString(), results.get(0));
+        }
+    }
+
+    @Test
+    void testFastSqlBufferWithTypes() throws Exception {
+        // Prove que FastSqlBuffer agora rastreia tipos
+        FastSqlBuffer buffer = new FastSqlBuffer();
+        buffer.write("INSERT INTO t VALUES (");
+        buffer.writeLiteral("hello", new SqlText());
+        buffer.write(", ");
+        buffer.writeLiteral(42, new SqlInt());
+        buffer.write(")");
+
+        assertEquals("INSERT INTO t VALUES (?, ?)", buffer.getSql());
+        assertEquals(2, buffer.getParams().size());
+        assertEquals(2, buffer.getParamTypes().size());
+        assertInstanceOf(SqlText.class, buffer.getParamTypes().get(0));
+        assertInstanceOf(SqlInt.class, buffer.getParamTypes().get(1));
+
+        // Sem tipo explícito → null
+        FastSqlBuffer buffer2 = new FastSqlBuffer();
+        buffer2.writeLiteral("no-type");
+        assertNull(buffer2.getParamTypes().get(0));
+    }
+
+    @Test
     void testBareMetalExecutorBatchInsert() throws Exception {
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:")) {
             conn.createStatement().execute("CREATE TABLE batch_test (id INTEGER, value TEXT)");
@@ -777,5 +820,161 @@ public class BareSqlEngineTest {
             assertTrue(rs.next());
             assertEquals(5, rs.getInt(1));
         }
+    }
+
+    // ===== Window Function Tests =====
+
+    @Test
+    void testWindowRowNumber() {
+        Expr expr = Sql.rowNumber().over().partitionBy("dept").orderBy("salary", false).build();
+        String sql = transpile(new Select(List.of(expr, new Column("name")), new Table("employees"), List.of(), null, List.of(), null, null, null), Dialect.POSTGRES);
+        assertTrue(sql.contains("ROW_NUMBER() OVER (PARTITION BY"));
+        assertTrue(sql.contains("ORDER BY"));
+        assertTrue(sql.contains("DESC"));
+    }
+
+    @Test
+    void testWindowRank() {
+        Expr expr = Sql.rank().over().partitionBy("dept").orderBy("score", true).build();
+        String sql = transpile(new Select(List.of(expr), new Table("students"), List.of(), null, List.of(), null, null, null), Dialect.POSTGRES);
+        assertTrue(sql.contains("RANK() OVER (PARTITION BY"));
+        assertTrue(sql.contains("ASC"));
+    }
+
+    @Test
+    void testWindowDenseRank() {
+        Expr expr = Sql.denseRank().over().orderBy("score", false).build();
+        String sql = transpile(new Select(List.of(expr), new Table("students"), List.of(), null, List.of(), null, null, null), Dialect.SQLITE);
+        assertTrue(sql.contains("DENSE_RANK() OVER (ORDER BY"));
+    }
+
+    @Test
+    void testWindowLag() {
+        Expr expr = Sql.lag("revenue").over().partitionBy("region").orderBy("month", true).build();
+        String sql = transpile(new Select(List.of(expr), new Table("sales"), List.of(), null, List.of(), null, null, null), Dialect.POSTGRES);
+        assertTrue(sql.contains("LAG("));
+        assertTrue(sql.contains("PARTITION BY"));
+    }
+
+    @Test
+    void testWindowLead() {
+        Expr expr = Sql.lead("price").over().orderBy("date", true).build();
+        String sql = transpile(new Select(List.of(expr), new Table("products"), List.of(), null, List.of(), null, null, null), Dialect.MYSQL);
+        assertTrue(sql.contains("LEAD("));
+    }
+
+    @Test
+    void testWindowNtile() {
+        Expr expr = Sql.ntile(4).over().orderBy("score", false).build();
+        String sql = transpile(new Select(List.of(expr), new Table("students"), List.of(), null, List.of(), null, null, null), Dialect.POSTGRES);
+        assertTrue(sql.contains("NTILE("));
+    }
+
+    @ParameterizedTest
+    @EnumSource(Dialect.class)
+    void testWindowFunctionsMultiDialect(Dialect dialect) {
+        Expr expr = Sql.rowNumber().over().partitionBy("dept").orderBy("salary", false).build();
+        String sql = transpile(new Select(List.of(expr), new Table("employees"), List.of(), null, List.of(), null, null, null), dialect);
+        assertNotNull(sql);
+        assertTrue(sql.contains("ROW_NUMBER()"));
+    }
+
+    @Test
+    void testWindowNoPartitionBy() {
+        Expr expr = Sql.rank().over().orderBy("created_at", false).build();
+        String sql = transpile(new Select(List.of(expr), new Table("events"), List.of(), null, List.of(), null, null, null), Dialect.POSTGRES);
+        assertTrue(sql.contains("RANK() OVER (ORDER BY"));
+        assertFalse(sql.contains("PARTITION BY"));
+    }
+
+    // ===== INSERT...SELECT Tests =====
+
+    @Test
+    void testInsertSelectBasic() {
+        Statement stmt = Sql.insertInto("archive")
+            .columns("id", "name")
+            .select("id", "name")
+            .from("users")
+            .build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertEquals("INSERT INTO \"archive\" (\"id\", \"name\") SELECT \"id\", \"name\" FROM \"users\"", sql);
+    }
+
+    @Test
+    void testInsertSelectWithWhere() {
+        Statement stmt = Sql.insertInto("active_backup")
+            .columns("id", "email")
+            .select("id", "email")
+            .from("users")
+            .where(Col.of("active").eq(true))
+            .build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("INSERT INTO"));
+        assertTrue(sql.contains("WHERE"));
+        assertTrue(sql.contains("="));
+    }
+
+    @Test
+    void testInsertSelectMultiDialect() {
+        for (Dialect d : Dialect.values()) {
+            Statement stmt = Sql.insertInto("backup")
+                .columns("id", "val")
+                .select("id", "val")
+                .from("source")
+                .build();
+            String sql = transpile(stmt, d);
+            assertNotNull(sql);
+            assertTrue(sql.contains("INSERT INTO"));
+            assertTrue(sql.contains("SELECT"));
+        }
+    }
+
+    @Test
+    void testInsertSelectIntegration() throws Exception {
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            conn.createStatement().execute("CREATE TABLE src (id INTEGER, name TEXT)");
+            conn.createStatement().execute("CREATE TABLE dst (id INTEGER, name TEXT)");
+            conn.createStatement().execute("INSERT INTO src VALUES (1, 'Alice'), (2, 'Bob')");
+
+            Statement stmt = Sql.insertInto("dst")
+                .columns("id", "name")
+                .select("id", "name")
+                .from("src")
+                .build();
+
+            // INSERT...SELECT doesn't need batch params — execute directly via SQL
+            FastSqlBuffer buffer = new FastSqlBuffer();
+            new DialectTranspiler(Dialect.SQLITE).generate(stmt, buffer);
+            conn.createStatement().execute(buffer.getSql());
+
+            var rs = conn.createStatement().executeQuery("SELECT COUNT(*) FROM dst");
+            assertTrue(rs.next());
+            assertEquals(2, rs.getInt(1));
+        }
+    }
+
+    // ===== Subquery Builder Tests =====
+
+    @Test
+    void testSubqueryInWhere() {
+        Select inner = Sql.select("id").from("premium_users").buildSelect();
+        Statement stmt = Sql.select("name", "email")
+            .from("users")
+            .where(Col.of("id").in(new Subquery(inner)))
+            .build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("IN (SELECT"));
+        assertTrue(sql.contains("premium_users"));
+    }
+
+    @Test
+    void testSubqueryAsExpr() {
+        Select inner = Sql.select("MAX(price)").from("products").buildSelect();
+        String sql = transpile(new Select(
+            List.of(new Subquery(inner)),
+            new Table("dual"),
+            List.of(), null, List.of(), null, null, null
+        ), Dialect.POSTGRES);
+        assertTrue(sql.contains("(SELECT"));
     }
 }

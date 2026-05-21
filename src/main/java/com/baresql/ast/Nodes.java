@@ -9,9 +9,10 @@ public interface Nodes {
     sealed interface Expr extends SqlNode { }
     sealed interface Statement extends SqlNode { }
 
-    enum Op { EQ, NEQ, GT, LT, GTE, LTE, AND, OR, ADD, SUB, MUL, DIV }
+    enum Op { EQ, NEQ, GT, LT, GTE, LTE, AND, OR, ADD, SUB, MUL, DIV, IN, NOT_IN }
     enum JoinType { INNER, LEFT, RIGHT, CROSS }
     enum AggFunc { COUNT, SUM, AVG, MIN, MAX }
+    enum WindowFunc { ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, NTILE }
 
     record Table(String name) implements SqlNode { }
     record Column(String name) implements Expr { }
@@ -23,6 +24,8 @@ public interface Nodes {
     record Assignment(Column column, Expr expression) implements SqlNode { }
     record Aggregate(AggFunc func, Expr expr, boolean distinct) implements Expr { }
     record Subquery(Select select) implements Expr { }
+    record WindowSpec(List<Column> partitionBy, List<OrderBy> orderBy) implements SqlNode { }
+    record WindowExpr(WindowFunc func, List<Expr> args, WindowSpec window) implements Expr { }
 
     record Join(JoinType type, Table table, Expr onCondition) implements SqlNode { }
     record OrderBy(Column column, boolean asc) implements SqlNode { }
@@ -35,6 +38,7 @@ public interface Nodes {
     ) implements Statement { }
 
     record Insert(Table table, List<ColumnDef> columns, List<Expr> values, Optional<List<Column>> returning) implements Statement { }
+    record InsertSelect(Table table, List<Column> columns, Select select) implements Statement { }
     record Upsert(Insert insert, List<Column> conflictColumns, List<Assignment> updateAssignments) implements Statement { }
     record Delete(Table table, Expr whereCondition) implements Statement { }
     record Update(Table table, List<Assignment> assignments, Expr whereCondition) implements Statement { }

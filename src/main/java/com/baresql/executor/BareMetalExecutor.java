@@ -4,6 +4,7 @@ import com.baresql.ast.Nodes.Statement;
 import com.baresql.compiler.Dialect;
 import com.baresql.compiler.DialectTranspiler;
 import com.baresql.compiler.FastSqlBuffer;
+import com.baresql.types.SqlTypes.SqlType;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -60,8 +61,14 @@ public class BareMetalExecutor {
         List<T> results = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             List<Object> params = buffer.getParams();
+            List<SqlType> paramTypes = buffer.getParamTypes();
             for (int i = 0; i < params.size(); i++) {
-                ps.setObject(i + 1, params.get(i));
+                Object value = params.get(i);
+                SqlType type = paramTypes.get(i);
+                if (type != null) {
+                    value = ParameterBinder.coerceForDialect(value, type, targetDialect);
+                }
+                ps.setObject(i + 1, value);
             }
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
