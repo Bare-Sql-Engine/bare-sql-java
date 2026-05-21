@@ -59,7 +59,10 @@ public class BareMetalExecutor {
         
         List<T> results = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            // Nota: Em uma versão madura, faríamos o bind dos parâmetros do FastSqlBuffer aqui
+            List<Object> params = buffer.getParams();
+            for (int i = 0; i < params.size(); i++) {
+                ps.setObject(i + 1, params.get(i));
+            }
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     results.add(mapper.map(rs)); // Sem Reflection! Direto na veia.

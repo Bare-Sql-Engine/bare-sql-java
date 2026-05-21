@@ -65,9 +65,9 @@ public class AotGenerator {
         if (stmt instanceof Select s && s.whereCondition() != null) {
             AstToIrPass irPass = new AstToIrPass();
             IrVar rootVar = irPass.visit(s.whereCondition());
-            var optimizedIr = IrOptimizer.optimize(irPass.getInstructions());
-            Expr optimizedWhere = IrToAstPass.reconstruct(optimizedIr, rootVar);
-            return new Select(s.columns(), s.table(), optimizedWhere);
+            var optResult = IrOptimizer.optimizeWithAliases(irPass.getInstructions());
+            Expr optimizedWhere = IrToAstPass.reconstruct(optResult.instructions(), rootVar, optResult.aliases());
+            return new Select(s.columns(), s.table(), s.joins(), optimizedWhere, s.orderBy(), s.groupBy(), s.limit(), s.offset());
         }
         return stmt;
     }

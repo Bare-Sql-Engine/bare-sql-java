@@ -28,13 +28,13 @@ public class MainSSA {
         irPass.getInstructions().forEach(i -> System.out.println("   " + i));
 
         // 3. Middle-End: Otimizar a IR matematicamente (CSE atua aqui)
-        var optimizedIr = IrOptimizer.optimize(irPass.getInstructions());
-        
+        var optResult = IrOptimizer.optimizeWithAliases(irPass.getInstructions());
+
         System.out.println("\n3. Representação Intermediária (SSA) Otimizada [CSE e Folding]:");
-        optimizedIr.forEach(i -> System.out.println("   " + i));
+        optResult.instructions().forEach(i -> System.out.println("   " + i));
 
         // 4. Back-End: Reconstruir a AST e Transpilar
-        Expr optimizedAst = IrToAstPass.reconstruct(optimizedIr, rootVar);
+        Expr optimizedAst = IrToAstPass.reconstruct(optResult.instructions(), rootVar, optResult.aliases());
         FastSqlBuffer optBuffer = new FastSqlBuffer();
         new DialectTranspiler(Dialect.POSTGRES).visit(optimizedAst, optBuffer);
         

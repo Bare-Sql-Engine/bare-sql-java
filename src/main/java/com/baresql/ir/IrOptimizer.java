@@ -8,65 +8,81 @@ import java.util.List;
 import java.util.Map;
 
 public class IrOptimizer {
-    
-    public static List<Instruction> optimize(List<Instruction> rawInstructions) {
+
+    public record OptResult(List<Instruction> instructions, Map<IrVar, IrVar> aliases) {}
+
+    public static OptResult optimizeWithAliases(List<Instruction> rawInstructions) {
         List<Instruction> optimized = new ArrayList<>();
-        
-        // Tabela Hash para mapear Valores já calculados e garantir o SSA estrito
         Map<IrOp, IrVar> computedExpressions = new HashMap<>();
-        
-        // Tabela para remapeamento de variáveis (quando eliminamos instruções)
         Map<IrVar, IrVar> varAliases = new HashMap<>();
 
         for (Instruction inst : rawInstructions) {
             IrOp op = inst.operation();
 
-           // 1. Resolve Aliases
+            // 1. Resolve Aliases
             if (op instanceof BinaryMath b) {
                 IrVar realLeft = varAliases.getOrDefault(b.left(), b.left());
                 IrVar realRight = varAliases.getOrDefault(b.right(), b.right());
-                
-                // NOVA REGRA: Idempotência Booleana (A AND A = A)
+
+                // Idempotência Booleana (A AND A = A)
                 if (realLeft.equals(realRight) && (b.op() == Op.AND || b.op() == Op.OR)) {
-                    // O resultado desta instrução inteira é simplesmente a variável da esquerda
                     varAliases.put(inst.result(), realLeft);
-                    continue; // Descarta o nó AND/OR completamente!
+                    continue;
                 }
-                
+
                 op = new BinaryMath(realLeft, b.op(), realRight);
             }
 
-            // 2. CONSTANT FOLDING (Dobramento Matemático)
-            // Se for uma operação entre duas constantes, resolvemos em tempo de compilação
+            // 2. CONSTANT FOLDING
             if (op instanceof BinaryMath b) {
                 IrOp leftDef = getDefinition(optimized, b.left());
                 IrOp rightDef = getDefinition(optimized, b.right());
-                
+
                 if (leftDef instanceof LoadLiteral ll && rightDef instanceof LoadLiteral lr) {
                     if (ll.value() instanceof Number numL && lr.value() instanceof Number numR) {
-                        if (b.op() == Op.GT) {
-                            // Substitui a operação matemática complexa por um booleano simples literal (1 ou 0 para SQL)
-                            op = new LoadLiteral(numL.doubleValue() > numR.doubleValue());
-                        }
-                        // *Nota: Expandir para ADD, MUL, etc...*
+                        double l = numL.doubleValue(), r = numR.doubleValue();
+                        op = switch (b.op()) {
+                            case GT -> new LoadLiteral(l > r);
+                            case LT -> new LoadLiteral(l < r);
+                            case GTE -> new LoadLiteral(l >= r);
+                            case LTE -> new LoadLiteral(l <= r);
+                            case EQ -> new LoadLiteral(l == r);
+                            case NEQ -> new LoadLiteral(l != r);
+                            case ADD -> new LoadLiteral(l + r);
+                            case SUB -> new LoadLiteral(l - r);
+                            case MUL -> new LoadLiteral(l * r);
+                            case DIV -> r != 0 ? new LoadLiteral(l / r) : op;
+                            default -> op;
+                        };
+                    } else if (ll.value() instanceof Boolean boolL && lr.value() instanceof Boolean boolR) {
+                        op = switch (b.op()) {
+                            case AND -> new LoadLiteral(boolL && boolR);
+                            case OR -> new LoadLiteral(boolL || boolR);
+                            case EQ -> new LoadLiteral(boolL == boolR);
+                            case NEQ -> new LoadLiteral(boolL != boolR);
+                            default -> op;
+                        };
                     }
                 }
             }
 
-            // 3. COMMON SUBEXPRESSION ELIMINATION (CSE)
-            // Se essa operação matemática EXATA já foi feita, não gere código, reutilize a variável virtual!
+            // 3. CSE
             if (computedExpressions.containsKey(op)) {
                 IrVar existingVar = computedExpressions.get(op);
-                varAliases.put(inst.result(), existingVar); // Mapeia o resultado novo pro antigo
-                continue; // Pula a adição dessa instrução (Eliminou o nó!)
+                varAliases.put(inst.result(), existingVar);
+                continue;
             }
 
-            // Registra a nova instrução válida e seu resultado
             computedExpressions.put(op, inst.result());
             optimized.add(new Instruction(inst.result(), op));
         }
 
-        return optimized;
+        return new OptResult(optimized, varAliases);
+    }
+
+    // Mantém compatibilidade com código existente
+    public static List<Instruction> optimize(List<Instruction> rawInstructions) {
+        return optimizeWithAliases(rawInstructions).instructions();
     }
 
     private static IrOp getDefinition(List<Instruction> instructions, IrVar var) {
