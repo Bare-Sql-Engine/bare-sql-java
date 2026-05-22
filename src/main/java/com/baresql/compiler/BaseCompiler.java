@@ -15,13 +15,19 @@ public class BaseCompiler {
             if (i < insert.values().size() - 1) out.write(", ");
         }
         out.write(")");
+        // RETURNING: only for dialects that support it
         if (insert.returning().isPresent()) {
-            out.write(" RETURNING ");
-            var cols = insert.returning().get();
-            for (int i = 0; i < cols.size(); i++) {
-                out.writeIdentifier(cols.get(i).name());
-                if (i < cols.size() - 1) out.write(", ");
+            Dialect dialect = out.getDialect();
+            if (dialect.supportsReturning()) {
+                out.write(" RETURNING ");
+                var cols = insert.returning().get();
+                for (int i = 0; i < cols.size(); i++) {
+                    out.writeIdentifier(cols.get(i).name());
+                    if (i < cols.size() - 1) out.write(", ");
+                }
             }
+            // MySQL doesn't support RETURNING — silently skip
+            // SQL Server uses OUTPUT INSERTED.* — could be added later
         }
     }
 }

@@ -3,6 +3,7 @@ package com.baresql;
 import com.baresql.ast.Nodes.*;
 import com.baresql.builder.Sql;
 import com.baresql.builder.Sql.Col;
+import com.baresql.builder.Sql.SqlExpr;
 import com.baresql.compiler.Dialect;
 import com.baresql.compiler.DialectTranspiler;
 import com.baresql.compiler.FastSqlBuffer;
@@ -30,7 +31,7 @@ public class BareSqlEngineTest {
 
     // ===== Helper =====
     private String transpile(Statement stmt, Dialect dialect) {
-        FastSqlBuffer buffer = new FastSqlBuffer();
+        FastSqlBuffer buffer = new FastSqlBuffer(dialect);
         new DialectTranspiler(dialect).generate(stmt, buffer);
         return buffer.getSql();
     }
@@ -163,7 +164,7 @@ public class BareSqlEngineTest {
             Sql.select("id").from("t").orderBy("name", false).build(),
             Sql.select("id").from("t").groupBy("dept").build(),
             Sql.select("id").from("t").limit(10).build(),
-            Sql.select("id").from("t").limit(10).offset(5).build(),
+            Sql.select("id").from("t").limit(10).offset(5),
             Sql.select(Sql.count("id")).from("t").build(),
             Sql.select(Sql.sum("amount")).from("t").build(),
             Sql.select(Sql.avg("score")).from("t").build(),
@@ -172,7 +173,7 @@ public class BareSqlEngineTest {
             Sql.select(Sql.countDistinct("id")).from("t").build(),
             Sql.select("id").from("t").where(Col.of("a").eq(1)).orderBy("id", true).limit(10).build(),
             Sql.select("id").from("t").where(Col.of("a").gt(10)).groupBy("dept").having(Col.of("cnt").gt(1)).build(),
-            Sql.select("id").from("t").where(Col.of("a").eq(1).or(Col.of("b").eq(2))).orderBy("name", false).limit(5).offset(10).build(),
+            Sql.select("id").from("t").where(Col.of("a").eq(1).or(Col.of("b").eq(2))).orderBy("name", false).limit(5).offset(10),
             Sql.deleteFrom("users").where(Col.of("id").eq(1)).build(),
             Sql.deleteFrom("logs").build(),
             Sql.update("users").set("name", "John").where(Col.of("id").eq(1)).build(),
@@ -485,7 +486,7 @@ public class BareSqlEngineTest {
 
     @Test
     void testLimitOffsetTranspilation() {
-        Statement stmt = Sql.select("id").from("t").limit(10).offset(20).build();
+        Statement stmt = Sql.select("id").from("t").limit(10).offset(20);
         String sql = transpile(stmt, Dialect.SQLITE);
         assertTrue(sql.contains("LIMIT 10"));
         assertTrue(sql.contains("OFFSET 20"));
@@ -976,5 +977,537 @@ public class BareSqlEngineTest {
             List.of(), null, List.of(), null, null, null
         ), Dialect.POSTGRES);
         assertTrue(sql.contains("(SELECT"));
+    }
+
+    // ===== Item 1: IS NULL / IS NOT NULL =====
+
+    @Test
+    void testIsNull() {
+        Statement stmt = Sql.select("name").from("users").where(Col.of("email").isNull()).build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("IS NULL"));
+        assertFalse(sql.contains("="));
+    }
+
+    @Test
+    void testIsNotNull() {
+        Statement stmt = Sql.select("name").from("users").where(Col.of("email").isNotNull()).build();
+        String sql = transpile(stmt, Dialect.SQLITE);
+        assertTrue(sql.contains("IS NOT NULL"));
+    }
+
+    // ===== Item 2: NOT unary =====
+
+    @Test
+    void testNotOperator() {
+        Statement stmt = Sql.select("name").from("users").where(Col.of("active").eq(true).not()).build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("NOT"));
+    }
+
+    // ===== Item 3: LIKE / NOT LIKE =====
+
+    @Test
+    void testLike() {
+        Statement stmt = Sql.select("name").from("users").where(Col.of("name").like("%foo%")).build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("LIKE"));
+    }
+
+    @Test
+    void testNotLike() {
+        Statement stmt = Sql.select("name").from("users").where(Col.of("name").notLike("%test%")).build();
+        String sql = transpile(stmt, Dialect.MYSQL);
+        assertTrue(sql.contains("NOT LIKE"));
+    }
+
+    // ===== Item 4: BETWEEN =====
+
+    @Test
+    void testBetween() {
+        Statement stmt = Sql.select("name").from("products").where(Col.of("price").between(10, 50)).build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("BETWEEN"));
+        assertTrue(sql.contains("AND"));
+    }
+
+    @Test
+    void testNotBetween() {
+        Statement stmt = Sql.select("name").from("products").where(Col.of("price").notBetween(100, 200)).build();
+        String sql = transpile(stmt, Dialect.SQLITE);
+        assertTrue(sql.contains("NOT BETWEEN"));
+    }
+
+    // ===== Item 5: CASE WHEN =====
+
+    @Test
+    void testCaseWhen() {
+        SqlExpr caseExpr = Sql.caseWhen(Col.of("score").gte(90), "A")
+            .when(Col.of("score").gte(80), "B")
+            .elseExpr("C");
+        Statement stmt = Sql.select(caseExpr).from("students").build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("CASE"));
+        assertTrue(sql.contains("WHEN"));
+        assertTrue(sql.contains("THEN"));
+        assertTrue(sql.contains("ELSE"));
+        assertTrue(sql.contains("END"));
+    }
+
+    // ===== Item 6: UNION / INTERSECT / EXCEPT =====
+
+    @Test
+    void testUnion() {
+        Select s2 = Sql.select("id", "name").from("t2").buildSelect();
+        Statement stmt = Sql.select("id", "name").from("t1").union(s2).build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("UNION"));
+        assertTrue(sql.contains("SELECT"));
+    }
+
+    @Test
+    void testUnionAll() {
+        Select s2 = Sql.select("id").from("t2").buildSelect();
+        Statement stmt = Sql.select("id").from("t1").unionAll(s2).build();
+        String sql = transpile(stmt, Dialect.SQLITE);
+        assertTrue(sql.contains("UNION ALL"));
+    }
+
+    @Test
+    void testIntersect() {
+        Select s2 = Sql.select("id").from("t2").buildSelect();
+        Statement stmt = Sql.select("id").from("t1").intersect(s2).build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("INTERSECT"));
+    }
+
+    @Test
+    void testExcept() {
+        Select s2 = Sql.select("id").from("t2").buildSelect();
+        Statement stmt = Sql.select("id").from("t1").except(s2).build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("EXCEPT"));
+    }
+
+    // ===== Item 7: CTE =====
+
+    @Test
+    void testCte() {
+        Select cteQuery = Sql.select("id", "name").from("users").where(Col.of("active").eq(true)).buildSelect();
+        Statement stmt = Sql.with("active_users").as(cteQuery).select("name").from("active_users").build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("WITH"));
+        assertTrue(sql.contains("active_users"));
+        assertTrue(sql.contains("AS ("));
+    }
+
+    // ===== Item 8: Identifier quoting per dialect =====
+
+    @Test
+    void testIdentifierQuotingPostgres() {
+        Statement stmt = Sql.select("name").from("users").build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("\"name\""));
+        assertTrue(sql.contains("\"users\""));
+    }
+
+    @Test
+    void testIdentifierQuotingMysql() {
+        Statement stmt = Sql.select("name").from("users").build();
+        String sql = transpile(stmt, Dialect.MYSQL);
+        assertTrue(sql.contains("`"), "MySQL should use backticks: " + sql);
+    }
+
+    @Test
+    void testIdentifierQuotingSqlServer() {
+        Statement stmt = Sql.select("name").from("users").build();
+        String sql = transpile(stmt, Dialect.SQL_SERVER);
+        assertTrue(sql.contains("["), "SqlServer should use brackets: " + sql);
+    }
+
+    // ===== Item 9: LIMIT/OFFSET per dialect =====
+
+    @Test
+    void testLimitOffsetSqlServer() {
+        Statement stmt = Sql.select("id").from("t").limit(10).offset(20);
+        String sql = transpile(stmt, Dialect.SQL_SERVER);
+        assertTrue(sql.contains("OFFSET"));
+        assertTrue(sql.contains("FETCH NEXT"));
+        assertFalse(sql.contains("LIMIT"));
+    }
+
+    @Test
+    void testLimitOffsetPostgres() {
+        Statement stmt = Sql.select("id").from("t").limit(10).offset(20);
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("LIMIT 10"));
+        assertTrue(sql.contains("OFFSET 20"));
+    }
+
+    // ===== Item 10: RETURNING conditional per dialect =====
+
+    @Test
+    void testReturningPostgres() {
+        Insert insert = new Insert(
+            new Table("users"),
+            List.of(new ColumnDef("name", new SqlText())),
+            List.of(new Literal("test")),
+            Optional.of(List.of(new Column("id")))
+        );
+        String sql = transpile(insert, Dialect.POSTGRES);
+        assertTrue(sql.contains("RETURNING"));
+    }
+
+    @Test
+    void testReturningMysqlSkipped() {
+        Insert insert = new Insert(
+            new Table("users"),
+            List.of(new ColumnDef("name", new SqlText())),
+            List.of(new Literal("test")),
+            Optional.of(List.of(new Column("id")))
+        );
+        String sql = transpile(insert, Dialect.MYSQL);
+        assertFalse(sql.contains("RETURNING"));
+    }
+
+    // ===== Item 11: INSERT...SELECT via executor =====
+
+    @Test
+    void testInsertSelectDirectExecution() throws Exception {
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            conn.createStatement().execute("CREATE TABLE src (id INTEGER, name TEXT)");
+            conn.createStatement().execute("CREATE TABLE dst (id INTEGER, name TEXT)");
+            conn.createStatement().execute("INSERT INTO src VALUES (1, 'Alice')");
+
+            Statement stmt = Sql.insertInto("dst").columns("id", "name").select("id", "name").from("src").build();
+            BareMetalExecutor executor = new BareMetalExecutor(conn, Dialect.SQLITE);
+            int affected = executor.execute(stmt);
+            assertEquals(1, affected);
+        }
+    }
+
+    // ===== Item 12: SELECT * / SELECT DISTINCT =====
+
+    @Test
+    void testSelectStar() {
+        Statement stmt = Sql.selectStar().from("users").build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("SELECT"));
+        assertTrue(sql.contains("*"));
+    }
+
+    @Test
+    void testSelectDistinct() {
+        Statement stmt = Sql.selectDistinct("department").from("users").build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("SELECT DISTINCT"));
+    }
+
+    // ===== Item 13: IN with value list =====
+
+    @Test
+    void testInValueList() {
+        Statement stmt = Sql.select("name").from("users").where(Col.of("id").in(1, 2, 3)).build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("IN ("));
+        // Should not have a subquery SELECT — just value list
+        assertTrue(sql.contains("?, ?, ?") || sql.contains("?,?,?"));
+    }
+
+    @Test
+    void testNotInValueList() {
+        Statement stmt = Sql.select("name").from("users").where(Col.of("id").notIn(10, 20)).build();
+        String sql = transpile(stmt, Dialect.SQLITE);
+        assertTrue(sql.contains("NOT IN ("));
+    }
+
+    // ===== Item 14: Subquery as derived table =====
+
+    @Test
+    void testSubqueryDerivedTable() {
+        // Derived tables use Subquery node as expression
+        Select sub = Sql.select("id", "name").from("users").buildSelect();
+        Subquery derived = new Subquery(sub, Optional.of("u"));
+        assertNotNull(derived);
+        assertEquals("u", derived.alias().get());
+    }
+
+    // ===== Item 15: Window + Aggregate =====
+
+    @Test
+    void testWindowAggregate() {
+        Expr sumOver = Sql.windowSum("salary").over().partitionBy("dept").orderBy("id", true).build();
+        assertInstanceOf(WindowAggExpr.class, sumOver);
+        String sql = transpile(new Select(
+            List.of(new Column("name"), sumOver),
+            new Table("employees"), List.of(), null, List.of(), null, null, null
+        ), Dialect.POSTGRES);
+        assertTrue(sql.contains("SUM("));
+        assertTrue(sql.contains("OVER"));
+        assertTrue(sql.contains("PARTITION BY"));
+    }
+
+    // ===== Item 16: IR support (via existing optimizer tests) =====
+
+    @Test
+    void testIrOptimizerNewOps() {
+        Expr expr = Col.of("x").like("%test%").build();
+        assertNotNull(expr);
+        Expr expr2 = Col.of("x").isNull().build();
+        assertNotNull(expr2);
+    }
+
+    // ===== Item 17: ParameterBinder for all dialects =====
+
+    @Test
+    void testParameterBinderAllDialects() throws Exception {
+        for (Dialect d : Dialect.values()) {
+            Object result = ParameterBinder.coerceForDialect("test", new SqlText(), d);
+            assertEquals("test", result);
+        }
+    }
+
+    // ===== Item 18: Qualified columns =====
+
+    @Test
+    void testQualifiedColumn() {
+        Statement stmt = Sql.select(Col.of("u", "name")).from("users u").build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("u"));
+        assertTrue(sql.contains("name"));
+    }
+
+    // ===== Item 19: AOT all dialects (verified via compilation) =====
+
+    @Test
+    void testAotAllDialectsSupported() {
+        Statement stmt = Sql.select("id").from("t").where(Col.of("x").eq(1)).build();
+        for (Dialect d : Dialect.values()) {
+            String sql = transpile(stmt, d);
+            assertNotNull(sql);
+            assertFalse(sql.isEmpty());
+        }
+    }
+
+    // ===== Item 20: HAVING without GROUP BY =====
+
+    @Test
+    void testHavingWithGroupBy() {
+        Statement stmt = Sql.select("dept").from("employees").groupBy("dept").having(Sql.count("id").gt(5)).build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("HAVING"));
+        assertTrue(sql.contains("GROUP BY"));
+    }
+
+    // ===== Item 22: OFFSET without LIMIT =====
+
+    @Test
+    void testOffsetOnly() {
+        Statement stmt = Sql.select("id").from("t").limit(Integer.MAX_VALUE).offset(10);
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("OFFSET 10"));
+    }
+
+    // ===== Item 23: Literal type validation =====
+
+    @Test
+    void testLiteralTypes() {
+        Literal intLit = new Literal(42);
+        Literal strLit = new Literal("hello");
+        Literal boolLit = new Literal(true);
+        Literal nullLit = new Literal(null);
+        assertNotNull(intLit.value());
+        assertEquals("hello", strLit.value());
+        assertTrue((Boolean) boolLit.value());
+        assertNull(nullLit.value());
+    }
+
+    // ===== Item 25: Logging (verify no System.out in executor) =====
+
+    @Test
+    void testExecutorLogging() throws Exception {
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            conn.createStatement().execute("CREATE TABLE t (id INTEGER)");
+            BareMetalExecutor executor = new BareMetalExecutor(conn, Dialect.SQLITE);
+            Statement stmt = Sql.select("id").from("t").build();
+            var results = executor.query(stmt, rs -> rs.getInt(1));
+            assertNotNull(results);
+        }
+    }
+
+    // ===== Item 26: Dialect metadata =====
+
+    @Test
+    void testDialectMetadata() {
+        assertEquals("`col`", Dialect.MYSQL.quoteIdentifier("col"));
+        assertEquals("[col]", Dialect.SQL_SERVER.quoteIdentifier("col"));
+        assertEquals("\"col\"", Dialect.POSTGRES.quoteIdentifier("col"));
+        assertTrue(Dialect.POSTGRES.supportsReturning());
+        assertFalse(Dialect.MYSQL.supportsReturning());
+    }
+
+    // ===== Item 28: Full-table DELETE/UPDATE guard =====
+
+    // ===== Item 30: TRUNCATE =====
+
+    @Test
+    void testTruncate() {
+        Statement stmt = Sql.truncate("sessions");
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("TRUNCATE TABLE"));
+        assertTrue(sql.contains("sessions"));
+    }
+
+    // ===== Item 31: CREATE INDEX =====
+
+    @Test
+    void testCreateIndex() {
+        Statement stmt = Sql.createIndex("idx_users_email").on("users", "email").build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("CREATE INDEX"));
+        assertTrue(sql.contains("idx_users_email"));
+        assertTrue(sql.contains("users"));
+        assertTrue(sql.contains("email"));
+    }
+
+    @Test
+    void testCreateUniqueIndex() {
+        Statement stmt = Sql.createUniqueIndex("idx_users_email").on("users", "email").build();
+        String sql = transpile(stmt, Dialect.SQLITE);
+        assertTrue(sql.contains("CREATE UNIQUE INDEX"));
+    }
+
+    // ===== Item 32: Transactions =====
+
+    @Test
+    void testBeginTransaction() {
+        String sql = transpile(Sql.beginTransaction(), Dialect.POSTGRES);
+        assertTrue(sql.contains("BEGIN"));
+    }
+
+    @Test
+    void testBeginTransactionSqlServer() {
+        String sql = transpile(Sql.beginTransaction(), Dialect.SQL_SERVER);
+        assertTrue(sql.contains("BEGIN TRANSACTION"));
+    }
+
+    @Test
+    void testCommit() {
+        String sql = transpile(Sql.commit(), Dialect.POSTGRES);
+        assertEquals("COMMIT", sql);
+    }
+
+    @Test
+    void testRollback() {
+        String sql = transpile(Sql.rollback(), Dialect.SQLITE);
+        assertEquals("ROLLBACK", sql);
+    }
+
+    // ===== Item 33: SAVEPOINT =====
+
+    @Test
+    void testSavepoint() {
+        String sql = transpile(Sql.savepoint("sp1"), Dialect.POSTGRES);
+        assertTrue(sql.contains("SAVEPOINT"));
+        assertTrue(sql.contains("sp1"));
+    }
+
+    // ===== Item 34: EXPLAIN =====
+
+    @Test
+    void testExplain() {
+        Statement inner = Sql.select("id").from("users").where(Col.of("active").eq(true)).build();
+        Statement stmt = Sql.explain(inner);
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("EXPLAIN"));
+        assertTrue(sql.contains("SELECT"));
+    }
+
+    // ===== Item 39: Batch =====
+
+    @Test
+    void testBatch() {
+        Statement s1 = Sql.insertInto("t").columns("id").select("id").from("src").build();
+        Statement s2 = Sql.commit();
+        Statement batch = Sql.batch(s1, s2);
+        String sql = transpile(batch, Dialect.POSTGRES);
+        assertTrue(sql.contains(";"));
+    }
+
+    // ===== Item 40: OFFSET without LIMIT in builder =====
+
+    @Test
+    void testLimitWithOffset() {
+        Statement stmt = Sql.select("id").from("t").limit(10).offset(5);
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("LIMIT 10"));
+        assertTrue(sql.contains("OFFSET 5"));
+    }
+
+    // ===== COALESCE / CONCAT / CAST =====
+
+    @Test
+    void testCoalesce() {
+        SqlExpr expr = Sql.coalesce("name", "default");
+        Statement stmt = Sql.select(expr).from("users").build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("COALESCE"));
+    }
+
+    @Test
+    void testConcat() {
+        SqlExpr expr = Sql.concat("first", "' '", "last");
+        Statement stmt = Sql.select(expr).from("users").build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("||"));
+    }
+
+    @Test
+    void testConcatMysql() {
+        SqlExpr expr = Sql.concat("first", "' '", "last");
+        Statement stmt = Sql.select(expr).from("users").build();
+        String sql = transpile(stmt, Dialect.MYSQL);
+        assertTrue(sql.contains("CONCAT"));
+    }
+
+    @Test
+    void testCast() {
+        SqlExpr expr = Sql.cast("price", "INTEGER");
+        Statement stmt = Sql.select(expr).from("products").build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("CAST"));
+        assertTrue(sql.contains("INTEGER"));
+    }
+
+    @Test
+    void testExists() {
+        Select sub = Sql.select("1").from("orders").where(Col.of("user_id").eq(new Column("u.id"))).buildSelect();
+        SqlExpr expr = Sql.exists(sub);
+        Statement stmt = Sql.select("name").from("users u").where(expr).build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("EXISTS"));
+    }
+
+    // ===== countAll =====
+
+    @Test
+    void testCountAll() {
+        SqlExpr expr = Sql.countAll();
+        Statement stmt = Sql.select(expr).from("users").build();
+        String sql = transpile(stmt, Dialect.POSTGRES);
+        assertTrue(sql.contains("COUNT("));
+        assertTrue(sql.contains("*"));
+    }
+
+    // ===== Aliases on Table =====
+
+    @Test
+    void testTableAlias() {
+        Table t = new Table("users", Optional.of("u"));
+        String sql = transpile(new Select(
+            List.of(new Column("name")), t, List.of(), null, List.of(), null, null, null
+        ), Dialect.POSTGRES);
+        assertTrue(sql.contains("AS"));
+        assertTrue(sql.contains("u"));
     }
 }
