@@ -22,7 +22,10 @@ public enum Dialect {
     }
 
     public String quoteIdentifier(String identifier) {
-        return identifierQuoteOpen + identifier + identifierQuoteClose;
+        if (identifier == null) return identifierQuoteOpen + identifierQuoteClose;
+        // Escape the closing quote character within the identifier
+        String escaped = identifier.replace(identifierQuoteClose, identifierQuoteClose + identifierQuoteClose);
+        return identifierQuoteOpen + escaped + identifierQuoteClose;
     }
 
     public boolean supportsReturning() { return supportsReturning; }

@@ -40,20 +40,40 @@ public class IrOptimizer {
 
                 if (leftDef instanceof LoadLiteral ll && rightDef instanceof LoadLiteral lr) {
                     if (ll.value() instanceof Number numL && lr.value() instanceof Number numR) {
-                        double l = numL.doubleValue(), r = numR.doubleValue();
-                        op = switch (b.op()) {
-                            case GT -> new LoadLiteral(l > r);
-                            case LT -> new LoadLiteral(l < r);
-                            case GTE -> new LoadLiteral(l >= r);
-                            case LTE -> new LoadLiteral(l <= r);
-                            case EQ -> new LoadLiteral(l == r);
-                            case NEQ -> new LoadLiteral(l != r);
-                            case ADD -> new LoadLiteral(l + r);
-                            case SUB -> new LoadLiteral(l - r);
-                            case MUL -> new LoadLiteral(l * r);
-                            case DIV -> r != 0 ? new LoadLiteral(l / r) : op;
-                            default -> op;
-                        };
+                        // Preserve integer types when both operands are integers
+                        boolean bothInt = (numL instanceof Integer || numL instanceof Long)
+                                       && (numR instanceof Integer || numR instanceof Long);
+                        if (bothInt) {
+                            long l = numL.longValue(), r = numR.longValue();
+                            op = switch (b.op()) {
+                                case GT -> new LoadLiteral(l > r);
+                                case LT -> new LoadLiteral(l < r);
+                                case GTE -> new LoadLiteral(l >= r);
+                                case LTE -> new LoadLiteral(l <= r);
+                                case EQ -> new LoadLiteral(l == r);
+                                case NEQ -> new LoadLiteral(l != r);
+                                case ADD -> new LoadLiteral(l + r);
+                                case SUB -> new LoadLiteral(l - r);
+                                case MUL -> new LoadLiteral(l * r);
+                                case DIV -> r != 0 ? new LoadLiteral(l / r) : op;
+                                default -> op;
+                            };
+                        } else {
+                            double l = numL.doubleValue(), r = numR.doubleValue();
+                            op = switch (b.op()) {
+                                case GT -> new LoadLiteral(l > r);
+                                case LT -> new LoadLiteral(l < r);
+                                case GTE -> new LoadLiteral(l >= r);
+                                case LTE -> new LoadLiteral(l <= r);
+                                case EQ -> new LoadLiteral(l == r);
+                                case NEQ -> new LoadLiteral(l != r);
+                                case ADD -> new LoadLiteral(l + r);
+                                case SUB -> new LoadLiteral(l - r);
+                                case MUL -> new LoadLiteral(l * r);
+                                case DIV -> r != 0 ? new LoadLiteral(l / r) : op;
+                                default -> op;
+                            };
+                        }
                     } else if (ll.value() instanceof Boolean boolL && lr.value() instanceof Boolean boolR) {
                         op = switch (b.op()) {
                             case AND -> new LoadLiteral(boolL && boolR);

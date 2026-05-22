@@ -5,13 +5,15 @@ import com.baresql.ast.Nodes.*;
 public class UpsertCompiler {
     public void compile(Upsert upsert, FastSqlBuffer out, Dialect dialect, DialectTranspiler main) {
         if (dialect == Dialect.SQL_SERVER) {
+            // SQL Server: MERGE INTO — do NOT generate INSERT first
             compileSqlServerStyle(upsert, out, main);
         } else {
+            // Postgres/SQLite/MySQL: INSERT first, then ON CONFLICT/ON DUPLICATE KEY
             new BaseCompiler().generateInsert(upsert.insert(), out, main);
             switch (dialect) {
                 case POSTGRES, SQLITE -> compilePostgresStyle(upsert, out, main);
                 case MYSQL -> compileMysqlStyle(upsert, out, main);
-                default -> throw new UnsupportedOperationException("Dialecto não suportado: " + dialect);
+                default -> throw new UnsupportedOperationException("Dialecto nao suportado: " + dialect);
             }
         }
     }
@@ -35,53 +37,57 @@ public class UpsertCompiler {
     }
 
     private void compileSqlServerStyle(Upsert u, FastSqlBuffer out, DialectTranspiler main) {
-        // SQL Server MERGE INTO requires a different approach: we need to undo the INSERT
-        // that was already written and rewrite as MERGE INTO ... USING ... WHEN MATCHED ...
-        // For simplicity, we rebuild from scratch using the insert data.
-        Insert ins = u.insert();
-        out.write("MERGE INTO "); out.writeIdentifier(ins.table().name()); out.write(" AS target USING (VALUES (");
-        for (int i = 0; i < ins.values().size(); i++) {
-            main.visit(ins.values().get(i), out);
-            if (i < ins.values().size() - 1) out.write(", ");
+        // MERGE INTO target AS target
+        // USING (VALUES (...)) AS source (col1, col2)
+        // ON target.conflict_col = source.conflict_col
+        // WHEN MATCHED THEN UPDATE SET ...
+        // WHEN NOT MATCHED THEN INSERT (...);
+        out.write("MERGE INTO "); out.writeIdentifier(u.insert().table().name()); out.write(" AS target");
+
+        // USING (VALUES (...)) AS source (columns)
+        out.write(" USING (VALUES (");
+        for (int i = 0; i < u.insert().values().size(); i++) {
+            main.visit(u.insert().values().get(i), out);
+            if (i < u.insert().values().size() - 1) out.write(", ");
         }
         out.write(")) AS source (");
-        for (int i = 0; i < ins.columns().size(); i++) {
-            out.writeIdentifier(ins.columns().get(i).name());
-            if (i < ins.columns().size() - 1) out.write(", ");
+        for (int i = 0; i < u.insert().columns().size(); i++) {
+            out.writeIdentifier(u.insert().columns().get(i).name());
+            if (i < u.insert().columns().size() - 1) out.write(", ");
         }
-        out.write(") ON ");
+        out.write(")");
+
+        // ON target.conflict_col = source.conflict_col
+        out.write(" ON ");
         for (int i = 0; i < u.conflictColumns().size(); i++) {
+            if (i > 0) out.write(" AND ");
             out.write("target."); out.writeIdentifier(u.conflictColumns().get(i).name());
             out.write(" = source."); out.writeIdentifier(u.conflictColumns().get(i).name());
-            if (i < u.conflictColumns().size() - 1) out.write(" AND ");
         }
+
+        // WHEN MATCHED THEN UPDATE SET ...
         out.write(" WHEN MATCHED THEN UPDATE SET ");
-        for (int i = 0; i < u.updateAssignments().size(); i++) {
-            var assign = u.updateAssignments().get(i);
-            out.write("target."); out.writeIdentifier(assign.column().name());
-            out.write(" = source."); out.writeIdentifier(assign.column().name());
-            if (i < u.updateAssignments().size() - 1) out.write(", ");
-        }
+        generateAssignments(u, out, "source.", main);
+
+        // WHEN NOT MATCHED THEN INSERT (...)
         out.write(" WHEN NOT MATCHED THEN INSERT (");
-        for (int i = 0; i < ins.columns().size(); i++) {
-            out.writeIdentifier(ins.columns().get(i).name());
-            if (i < ins.columns().size() - 1) out.write(", ");
+        for (int i = 0; i < u.insert().columns().size(); i++) {
+            out.writeIdentifier(u.insert().columns().get(i).name());
+            if (i < u.insert().columns().size() - 1) out.write(", ");
         }
         out.write(") VALUES (");
-        for (int i = 0; i < ins.columns().size(); i++) {
-            out.write("source."); out.writeIdentifier(ins.columns().get(i).name());
-            if (i < ins.columns().size() - 1) out.write(", ");
+        for (int i = 0; i < u.insert().columns().size(); i++) {
+            out.write("source."); out.writeIdentifier(u.insert().columns().get(i).name());
+            if (i < u.insert().columns().size() - 1) out.write(", ");
         }
-        out.write(");");
+        out.write(")");
     }
 
-    private void generateAssignments(Upsert u, FastSqlBuffer out, String prefix, DialectTranspiler main) {
+    private void generateAssignments(Upsert u, FastSqlBuffer out, String excludedPrefix, DialectTranspiler main) {
         for (int i = 0; i < u.updateAssignments().size(); i++) {
             var assign = u.updateAssignments().get(i);
             out.writeIdentifier(assign.column().name()); out.write(" = ");
-            if (prefix != null && assign.expression() instanceof Column c) {
-                out.write(prefix); out.writeIdentifier(c.name());
-            } else { main.visit(assign.expression(), out); }
+            out.write(excludedPrefix); out.writeIdentifier(assign.column().name());
             if (i < u.updateAssignments().size() - 1) out.write(", ");
         }
     }

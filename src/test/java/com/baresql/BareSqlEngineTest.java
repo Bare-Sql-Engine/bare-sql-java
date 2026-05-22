@@ -663,14 +663,21 @@ public class BareSqlEngineTest {
     void testConstantFoldingAdd() {
         Expr result = foldAndReconstruct(new BinaryExpr(new Literal(3), Op.ADD, new Literal(5)));
         assertInstanceOf(Literal.class, result);
-        assertEquals(8.0, ((Literal) result).value());
+        assertEquals(8L, ((Literal) result).value(), "Integer arithmetic should preserve integer type");
     }
 
     @Test
     void testConstantFoldingMul() {
         Expr result = foldAndReconstruct(new BinaryExpr(new Literal(3), Op.MUL, new Literal(5)));
         assertInstanceOf(Literal.class, result);
-        assertEquals(15.0, ((Literal) result).value());
+        assertEquals(15L, ((Literal) result).value(), "Integer arithmetic should preserve integer type");
+    }
+
+    @Test
+    void testConstantFoldingDoubleArithmetic() {
+        Expr result = foldAndReconstruct(new BinaryExpr(new Literal(3.5), Op.ADD, new Literal(2.5)));
+        assertInstanceOf(Literal.class, result);
+        assertEquals(6.0, ((Literal) result).value(), "Double arithmetic should stay as double");
     }
 
     @Test
@@ -1509,5 +1516,71 @@ public class BareSqlEngineTest {
         ), Dialect.POSTGRES);
         assertTrue(sql.contains("AS"));
         assertTrue(sql.contains("u"));
+    }
+
+    // ===== P0 Bug Fixes =====
+
+    @Test
+    void testUpsertSqlServerNoDoubleInsert() {
+        // Bug: UPSERT SQL Server generated INSERT + MERGE (invalid SQL)
+        Upsert upsert = new Upsert(
+            new Insert(new Table("users"),
+                List.of(new ColumnDef("id", new SqlInt()), new ColumnDef("name", new SqlText())),
+                List.of(new Literal(1), new Literal("Alice")),
+                Optional.empty()),
+            List.of(new Column("id")),
+            List.of(new Assignment(new Column("name"), new Literal("Alice Updated")))
+        );
+        String sql = transpile(upsert, Dialect.SQL_SERVER);
+        assertFalse(sql.startsWith("INSERT"), "SqlServer UPSERT should NOT start with INSERT: " + sql);
+        assertTrue(sql.contains("MERGE INTO"), "Should contain MERGE INTO: " + sql);
+        assertTrue(sql.contains("WHEN MATCHED"), "Should contain WHEN MATCHED: " + sql);
+        assertTrue(sql.contains("WHEN NOT MATCHED"), "Should contain WHEN NOT MATCHED: " + sql);
+    }
+
+    @Test
+    void testIdentifierInjectionPostgres() {
+        // Bug: SQL injection via identifiers — no escaping of quotes
+        String malicious = "col\"; DROP TABLE users; --";
+        String quoted = Dialect.POSTGRES.quoteIdentifier(malicious);
+        // Should escape the inner double quote by doubling it
+        assertTrue(quoted.startsWith("\""), "Should start with quote");
+        assertTrue(quoted.endsWith("\""), "Should end with quote");
+        // The " inside should be escaped to ""
+        // Result: "col""; DROP TABLE users; --"
+        // SQL parser sees: col"; DROP TABLE users; --  (as identifier name, safe)
+        assertTrue(quoted.contains("\"\""), "Inner quotes should be doubled (escaped): " + quoted);
+    }
+
+    @Test
+    void testIdentifierInjectionMysql() {
+        String malicious = "col`";
+        String quoted = Dialect.MYSQL.quoteIdentifier(malicious);
+        assertTrue(quoted.contains("``"), "Backtick should be doubled: " + quoted);
+    }
+
+    @Test
+    void testIdentifierInjectionSqlServer() {
+        String malicious = "col]";
+        String quoted = Dialect.SQL_SERVER.quoteIdentifier(malicious);
+        assertTrue(quoted.contains("]]"), "Bracket should be doubled: " + quoted);
+    }
+
+    @Test
+    void testConstantFoldingPreservesIntType() {
+        // Bug: constant folding transformed int to double (3+5 became 8.0)
+        Expr result = foldAndReconstruct(new BinaryExpr(new Literal(10), Op.SUB, new Literal(3)));
+        assertInstanceOf(Literal.class, result);
+        Object val = ((Literal) result).value();
+        assertInstanceOf(Long.class, val, "Integer subtraction should produce Long, not Double");
+        assertEquals(7L, val);
+    }
+
+    @Test
+    void testConstantFoldingMixedTypes() {
+        // Mixed int + double should produce double
+        Expr result = foldAndReconstruct(new BinaryExpr(new Literal(3), Op.ADD, new Literal(2.5)));
+        assertInstanceOf(Literal.class, result);
+        assertEquals(5.5, ((Literal) result).value());
     }
 }
